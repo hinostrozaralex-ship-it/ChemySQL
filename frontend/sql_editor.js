@@ -1,0 +1,478 @@
+/**
+ * Editor de Código SQL Profesional para SGBD-Smart.
+ * Incluye numeración de líneas, resaltado de sintaxis SQL en tiempo real,
+ * reglas de indentación automática (Tab, Enter, auto-cierre) y autocompletado inteligente
+ * basado en palabras clave SQL, tipos de datos, snippets y tablas/columnas del esquema activo.
+ */
+
+class SQLCodeEditorController {
+    constructor(options = {}) {
+        this.textarea = document.getElementById(options.textareaId || "sql-code-textarea");
+        this.highlightLayer = document.getElementById(options.highlightId || "sql-highlight-layer");
+        this.gutter = document.getElementById(options.gutterId || "sql-line-gutter");
+        this.popup = document.getElementById(options.popupId || "sql-autocomplete-popup");
+
+        this.onChange = options.onChange || (() => {});
+        this.onExecuteShortcut = options.onExecuteShortcut || (() => {});
+        this.onSaveShortcut = options.onSaveShortcut || (() => {});
+        this.getSchemaContract = options.getSchemaContract || (() => null);
+
+        this.suggestions = [];
+        this.activeIndex = 0;
+        this.currentTokenRange = { start: 0, end: 0 };
+
+        this.SQL_KEYWORDS = [
+            "SELECT", "FROM", "WHERE", "INNER JOIN", "LEFT JOIN", "RIGHT JOIN", "JOIN", "ON",
+            "GROUP BY", "HAVING", "ORDER BY", "ASC", "DESC", "LIMIT", "OFFSET", "DISTINCT",
+            "INSERT INTO", "VALUES", "UPDATE", "SET", "DELETE FROM",
+            "CREATE DATABASE", "USE", "CREATE TABLE", "CREATE INDEX", "ALTER TABLE", "ADD COLUMN",
+            "DROP TABLE", "DROP DATABASE", "IF NOT EXISTS", "IF EXISTS",
+            "CONSTRAINT", "PRIMARY KEY", "FOREIGN KEY", "REFERENCES", "ON DELETE RESTRICT",
+            "ON DELETE CASCADE", "ON DELETE SET NULL", "ON UPDATE CASCADE",
+            "NOT NULL", "NULL", "UNIQUE", "DEFAULT", "CHECK", "AUTO_INCREMENT", "AUTOINCREMENT",
+            "CHARACTER SET utf8mb4", "COLLATE utf8mb4_spanish_ci",
+            "SHOW TABLES", "SHOW DATABASES", "DESCRIBE", "EXPLAIN QUERY PLAN",
+            "AND", "OR", "NOT", "IN", "LIKE", "BETWEEN", "IS NULL", "IS NOT NULL", "AS",
+            "COUNT(*)", "SUM(", "AVG(", "MIN(", "MAX(", "CURRENT_TIMESTAMP", "CURRENT_DATE"
+        ];
+
+        this.SQL_TYPES = [
+            "INTEGER", "INT", "SMALLINT", "BIGINT", "TINYINT",
+            "VARCHAR(50)", "VARCHAR(120)", "VARCHAR(150)", "CHAR(10)", "TEXT",
+            "DECIMAL(10,2)", "NUMERIC(10,2)", "FLOAT", "REAL",
+            "DATE", "DATETIME", "TIMESTAMP", "BOOLEAN"
+        ];
+
+        this.SQL_SNIPPETS = [
+            {
+                label: "CREATE DATABASE ... CHARACTER SET utf8mb4",
+                insert: "CREATE DATABASE MiBaseDatos CHARACTER SET utf8mb4 COLLATE utf8mb4_spanish_ci;\nUSE MiBaseDatos;\n",
+                kind: "SNIPPET",
+            },
+            {
+                label: "CREATE TABLE (estructura completa con PK)",
+                insert: "CREATE TABLE nombre_tabla (\n    id          INTEGER PRIMARY KEY AUTOINCREMENT,\n    nombre      VARCHAR(100) NOT NULL,\n    fecha_alta  DATE\n);",
+                kind: "SNIPPET",
+            },
+            {
+                label: "CONSTRAINT PK_tabla PRIMARY KEY (...)",
+                insert: "CONSTRAINT PK_tabla PRIMARY KEY (id)",
+                kind: "SNIPPET",
+            },
+            {
+                label: "CONSTRAINT FK_tabla FOREIGN KEY (...) REFERENCES ...",
+                insert: "CONSTRAINT FK_tabla FOREIGN KEY (padre_id) REFERENCES tabla_padre(id) ON DELETE RESTRICT",
+                kind: "SNIPPET",
+            },
+            {
+                label: "SELECT ... FROM ... WHERE ... ORDER BY ...",
+                insert: "SELECT *\nFROM tabla\nWHERE id > 0\nORDER BY id DESC\nLIMIT 25;",
+                kind: "SNIPPET",
+            },
+        ];
+
+        if (this.textarea) {
+            this._bindEvents();
+            this.refreshHighlight();
+        }
+    }
+
+    _bindEvents() {
+        this.textarea.addEventListener("input", () => {
+            this.refreshHighlight();
+            this.onChange(this.textarea.value);
+            this._updateAutocomplete(false);
+        });
+
+        this.textarea.addEventListener("scroll", () => {
+            this._syncScroll();
+        });
+
+        this.textarea.addEventListener("keydown", (e) => this._handleKeyDown(e));
+
+        this.textarea.addEventListener("blur", () => {
+            setTimeout(() => this.hidePopup(), 160);
+        });
+
+        this.textarea.addEventListener("click", () => {
+            this.hidePopup();
+        });
+    }
+
+    setValue(text) {
+        if (!this.textarea) return;
+        this.textarea.value = text || "";
+        this.refreshHighlight();
+        this.hidePopup();
+    }
+
+    getValue() {
+        return this.textarea ? this.textarea.value : "";
+    }
+
+    insertTokenAtCursor(token, smartSpacing = true) {
+        if (!this.textarea) return;
+        const start = this.textarea.selectionStart;
+        const end = this.textarea.selectionEnd;
+        const val = this.textarea.value;
+
+        let toInsert = token;
+        if (smartSpacing) {
+            const prevChar = start > 0 ? val.charAt(start - 1) : "";
+            const nextChar = end < val.length ? val.charAt(end) : "";
+            const needsLeadingSpace = prevChar !== "" && !/[\s(.,(]/.test(prevChar);
+            const needsTrailingSpace = nextChar !== "" && !/[\s).,;]/.test(nextChar);
+            toInsert = (needsLeadingSpace ? " " : "") + token + (needsTrailingSpace ? " " : "");
+        }
+
+        this.textarea.value = val.slice(0, start) + toInsert + val.slice(end);
+        const pos = start + toInsert.length;
+        this.textarea.setSelectionRange(pos, pos);
+        this.textarea.focus();
+        this.refreshHighlight();
+        this.onChange(this.textarea.value);
+    }
+
+    _handleKeyDown(e) {
+        // Ctrl+Enter -> Ejecutar SQL
+        if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+            e.preventDefault();
+            this.hidePopup();
+            this.onExecuteShortcut();
+            return;
+        }
+        // Ctrl+S -> Guardar archivo .sql
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+            e.preventDefault();
+            this.hidePopup();
+            this.onSaveShortcut();
+            return;
+        }
+        // Ctrl+Space -> Forzar menú de autocompletado
+        if (e.ctrlKey && e.code === "Space") {
+            e.preventDefault();
+            this._updateAutocomplete(true);
+            return;
+        }
+
+        // Navegación dentro del menú de autocompletado si está abierto
+        if (this.popup && !this.popup.classList.contains("hidden") && this.suggestions.length > 0) {
+            if (e.key === "ArrowDown") {
+                e.preventDefault();
+                this.activeIndex = (this.activeIndex + 1) % this.suggestions.length;
+                this._renderPopupItems();
+                return;
+            }
+            if (e.key === "ArrowUp") {
+                e.preventDefault();
+                this.activeIndex = (this.activeIndex - 1 + this.suggestions.length) % this.suggestions.length;
+                this._renderPopupItems();
+                return;
+            }
+            if (e.key === "Tab" || e.key === "Enter") {
+                e.preventDefault();
+                this._applySuggestion(this.suggestions[this.activeIndex]);
+                return;
+            }
+            if (e.key === "Escape") {
+                e.preventDefault();
+                this.hidePopup();
+                return;
+            }
+        }
+
+        // Regla de escritura: Tab inserta 4 espacios de indentación
+        if (e.key === "Tab") {
+            e.preventDefault();
+            this.insertTokenAtCursor("    ");
+            return;
+        }
+
+        // Regla de escritura: Enter mantiene indentación actual (y añade 4 espacios tras '(')
+        if (e.key === "Enter") {
+            const start = this.textarea.selectionStart;
+            const end = this.textarea.selectionEnd;
+            const val = this.textarea.value;
+            const lineStart = val.lastIndexOf("\n", start - 1) + 1;
+            const currentLine = val.slice(lineStart, start);
+            const indentMatch = currentLine.match(/^(\s*)/);
+            let indent = indentMatch ? indentMatch[1] : "";
+            if (currentLine.trim().endsWith("(")) {
+                indent += "    ";
+            }
+            e.preventDefault();
+            const insertText = "\n" + indent;
+            this.textarea.value = val.slice(0, start) + insertText + val.slice(end);
+            const pos = start + insertText.length;
+            this.textarea.setSelectionRange(pos, pos);
+            this.refreshHighlight();
+            this.onChange(this.textarea.value);
+            return;
+        }
+
+        // Auto-cierre de paréntesis y comillas simples
+        if (e.key === "(" || e.key === "'") {
+            const start = this.textarea.selectionStart;
+            const end = this.textarea.selectionEnd;
+            const val = this.textarea.value;
+            const nextChar = val.charAt(end);
+            if (start === end && (!nextChar || /[\s;,)]/.test(nextChar))) {
+                e.preventDefault();
+                const pair = e.key === "(" ? "()" : "''";
+                this.textarea.value = val.slice(0, start) + pair + val.slice(end);
+                this.textarea.setSelectionRange(start + 1, start + 1);
+                this.refreshHighlight();
+                this.onChange(this.textarea.value);
+            }
+        }
+    }
+
+    _updateAutocomplete(forceOpen) {
+        if (!this.textarea || !this.popup) return;
+        const pos = this.textarea.selectionStart;
+        const textBefore = this.textarea.value.slice(0, pos);
+
+        // Detectar patrón "tabla.prefijo" o palabra simple
+        const dotMatch = textBefore.match(/([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]*)$/);
+        const wordMatch = textBefore.match(/([a-zA-Z_][a-zA-Z0-9_]*)$/);
+
+        const candidates = [];
+        const contract = this.getSchemaContract();
+        const tables = (contract && contract.tables) || [];
+
+        if (dotMatch) {
+            const tableOrAlias = dotMatch[1].toLowerCase();
+            const colPrefix = dotMatch[2].toLowerCase();
+            this.currentTokenRange = { start: pos - dotMatch[2].length, end: pos };
+
+            // Buscar tabla por nombre exacto o por inicial de alias (ej. c. -> clientes)
+            const matchedTable =
+                tables.find((t) => t.name.toLowerCase() === tableOrAlias) ||
+                tables.find((t) => t.name.toLowerCase().startsWith(tableOrAlias));
+
+            if (matchedTable) {
+                (matchedTable.columns || []).forEach((col) => {
+                    if (!colPrefix || col.name.toLowerCase().startsWith(colPrefix)) {
+                        candidates.push({
+                            label: col.name,
+                            insert: col.name,
+                            kind: "COL",
+                            detail: `${matchedTable.name} · ${col.data_type}`,
+                        });
+                    }
+                });
+            }
+        } else if (wordMatch && (wordMatch[1].length >= 2 || forceOpen)) {
+            const prefix = wordMatch[1].toUpperCase();
+            const prefixLow = wordMatch[1].toLowerCase();
+            this.currentTokenRange = { start: pos - wordMatch[1].length, end: pos };
+
+            // 1. Tablas del esquema activo
+            tables.forEach((t) => {
+                if (t.name.toLowerCase().startsWith(prefixLow)) {
+                    candidates.push({
+                        label: t.name,
+                        insert: t.name,
+                        kind: "TABLA",
+                        detail: `${(t.columns || []).length} cols`,
+                    });
+                }
+            });
+
+            // 2. Columnas del esquema activo
+            const seenCols = new Set();
+            tables.forEach((t) => {
+                (t.columns || []).forEach((c) => {
+                    if (c.name.toLowerCase().startsWith(prefixLow) && !seenCols.has(c.name)) {
+                        seenCols.add(c.name);
+                        candidates.push({
+                            label: c.name,
+                            insert: c.name,
+                            kind: "COL",
+                            detail: `${t.name} (${c.data_type})`,
+                        });
+                    }
+                });
+            });
+
+            // 3. Palabras clave SQL
+            this.SQL_KEYWORDS.forEach((kw) => {
+                if (kw.startsWith(prefix)) {
+                    candidates.push({
+                        label: kw,
+                        insert: kw,
+                        kind: "SQL",
+                        detail: "Palabra clave",
+                    });
+                }
+            });
+
+            // 4. Tipos de datos SQL
+            this.SQL_TYPES.forEach((tp) => {
+                if (tp.startsWith(prefix)) {
+                    candidates.push({
+                        label: tp,
+                        insert: tp,
+                        kind: "TIPO",
+                        detail: "Tipo SQL",
+                    });
+                }
+            });
+
+            // 5. Snippets completos de sentencias
+            this.SQL_SNIPPETS.forEach((sn) => {
+                if (sn.label.toUpperCase().startsWith(prefix)) {
+                    candidates.push({
+                        label: sn.label,
+                        insert: sn.insert,
+                        kind: "SNIPPET",
+                        detail: "Plantilla",
+                    });
+                }
+            });
+        } else if (forceOpen) {
+            this.currentTokenRange = { start: pos, end: pos };
+            this.SQL_SNIPPETS.forEach((sn) => candidates.push({ ...sn, detail: "Plantilla" }));
+            tables.forEach((t) =>
+                candidates.push({ label: t.name, insert: t.name, kind: "TABLA", detail: "Tabla activa" })
+            );
+        }
+
+        this.suggestions = candidates.slice(0, 10);
+        this.activeIndex = 0;
+
+        if (this.suggestions.length === 0) {
+            this.hidePopup();
+            return;
+        }
+
+        this._renderPopupItems();
+        this._positionPopup();
+        this.popup.classList.remove("hidden");
+    }
+
+    _renderPopupItems() {
+        if (!this.popup) return;
+        this.popup.innerHTML = this.suggestions
+            .map(
+                (item, idx) => `
+                <div class="ac-item ${idx === this.activeIndex ? "active" : ""}" data-ac-idx="${idx}">
+                    <span class="ac-kind ac-kind-${item.kind.toLowerCase()}">${item.kind}</span>
+                    <span class="ac-label">${this._escape(item.label)}</span>
+                    <span class="ac-detail">${this._escape(item.detail || "")}</span>
+                </div>
+            `
+            )
+            .join("");
+
+        this.popup.querySelectorAll("[data-ac-idx]").forEach((row) => {
+            row.addEventListener("mousedown", (e) => {
+                e.preventDefault();
+                const idx = Number(row.getAttribute("data-ac-idx"));
+                if (this.suggestions[idx]) {
+                    this._applySuggestion(this.suggestions[idx]);
+                }
+            });
+        });
+    }
+
+    _positionPopup() {
+        if (!this.popup || !this.textarea) return;
+        const pos = this.textarea.selectionStart;
+        const lines = this.textarea.value.slice(0, pos).split("\n");
+        const lineNum = lines.length;
+        const colNum = lines[lines.length - 1].length;
+        const lineHeight = 20;
+        const topPx = Math.min(this.textarea.clientHeight - 10, lineNum * lineHeight - this.textarea.scrollTop + 6);
+        const leftPx = Math.min(this.textarea.clientWidth - 260, Math.max(46, 46 + colNum * 7.8));
+        this.popup.style.top = `${Math.max(24, topPx)}px`;
+        this.popup.style.left = `${leftPx}px`;
+    }
+
+    _applySuggestion(item) {
+        if (!this.textarea || !item) return;
+        const val = this.textarea.value;
+        const { start, end } = this.currentTokenRange;
+        const suffix = item.kind === "SNIPPET" || item.insert.endsWith("(") ? "" : " ";
+        const textToInsert = item.insert + suffix;
+        this.textarea.value = val.slice(0, start) + textToInsert + val.slice(end);
+        const newPos = start + textToInsert.length;
+        this.textarea.setSelectionRange(newPos, newPos);
+        this.textarea.focus();
+        this.hidePopup();
+        this.refreshHighlight();
+        this.onChange(this.textarea.value);
+    }
+
+    hidePopup() {
+        if (this.popup) this.popup.classList.add("hidden");
+    }
+
+    refreshHighlight() {
+        if (!this.textarea || !this.highlightLayer || !this.gutter) return;
+        const code = this.textarea.value;
+        const lineCount = Math.max(1, code.split("\n").length);
+        let gutterHtml = "";
+        for (let i = 1; i <= lineCount; i++) {
+            gutterHtml += `<div>${i}</div>`;
+        }
+        this.gutter.innerHTML = gutterHtml;
+        this.highlightLayer.innerHTML = this._highlightSQL(code) + "\n";
+        this._syncScroll();
+    }
+
+    _syncScroll() {
+        if (!this.textarea || !this.highlightLayer || !this.gutter) return;
+        this.highlightLayer.scrollTop = this.textarea.scrollTop;
+        this.highlightLayer.scrollLeft = this.textarea.scrollLeft;
+        this.gutter.scrollTop = this.textarea.scrollTop;
+    }
+
+    _highlightSQL(raw) {
+        let escaped = this._escape(raw);
+
+        // Proteger comentarios y cadenas antes de resaltar palabras clave
+        const placeholders = [];
+        const stash = (html) => {
+            const key = `___SQLTOK_${placeholders.length}___`;
+            placeholders.push(html);
+            return key;
+        };
+
+        // Comentarios de bloque /* ... */
+        escaped = escaped.replace(/\/\*[\s\S]*?\*\//g, (m) => stash(`<span class="hl-comment">${m}</span>`));
+        // Comentarios de línea -- ...
+        escaped = escaped.replace(/--[^\n]*/g, (m) => stash(`<span class="hl-comment">${m}</span>`));
+        // Cadenas entre comillas simples
+        escaped = escaped.replace(/'(?:''|[^'])*'/g, (m) => stash(`<span class="hl-string">${m}</span>`));
+
+        // Tipos de datos SQL
+        const typeRegex =
+            /\b(INTEGER|INT|SMALLINT|BIGINT|TINYINT|NVARCHAR|VARCHAR|CHAR|TEXT|DECIMAL|NUMERIC|FLOAT|REAL|DOUBLE|DATE|DATETIME2|DATETIME|TIMESTAMP|TIME|BOOLEAN|BIT|SERIAL|BLOB)\b/gi;
+        escaped = escaped.replace(typeRegex, '<span class="hl-type">$1</span>');
+
+        // Palabras clave SQL (DML + DDL Multi-Dialecto)
+        const kwRegex =
+            /\b(SELECT|FROM|WHERE|INNER|LEFT|RIGHT|OUTER|CROSS|JOIN|ON|GROUP|BY|HAVING|ORDER|ASC|DESC|LIMIT|OFFSET|DISTINCT|INSERT|INTO|VALUES|UPDATE|SET|DELETE|CREATE|DATABASE|USE|TABLE|INDEX|ALTER|ADD|COLUMN|DROP|IF|NOT|EXISTS|CONSTRAINT|PRIMARY|FOREIGN|KEY|REFERENCES|RESTRICT|CASCADE|NO|ACTION|NULL|UNIQUE|DEFAULT|CHECK|GENERATED|ALWAYS|STORED|VIRTUAL|AUTO_INCREMENT|AUTOINCREMENT|IDENTITY|CHARACTER|CHARSET|COLLATE|SHOW|TABLES|DATABASES|DESCRIBE|EXPLAIN|QUERY|PLAN|AND|OR|IN|LIKE|BETWEEN|IS|AS|COUNT|SUM|AVG|MIN|MAX|PRAGMA|ENGINE|UNSIGNED|GO|DB_ID|FOREIGN_KEY_CHECKS|NOCASE)\b/gi;
+        escaped = escaped.replace(kwRegex, '<span class="hl-keyword">$1</span>');
+
+        // Números
+        escaped = escaped.replace(/\b(\d+(?:\.\d+)?)\b/g, '<span class="hl-number">$1</span>');
+
+        // Restaurar comentarios y cadenas
+        placeholders.forEach((html, i) => {
+            escaped = escaped.replace(`___SQLTOK_${i}___`, html);
+        });
+        return escaped;
+    }
+
+    _escape(str) {
+        return String(str || "")
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;");
+    }
+}
+
+window.SQLCodeEditorController = SQLCodeEditorController;

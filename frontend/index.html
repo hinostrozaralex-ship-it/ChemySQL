@@ -1,0 +1,901 @@
+<!DOCTYPE html>
+<html lang="es" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VarSQL · Estudio Relacional y Sala de Revisión SQL</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+    <link rel="stylesheet" href="/styles.css?v=18">
+</head>
+<body data-app-mode="standard">
+    <!-- Cabecera Principal de Instrumentación -->
+    <header class="workbench-header">
+        <div class="brand-cluster">
+            <div class="brand-emblem" aria-hidden="true">
+                <img src="/varsql_logo.png" alt="VarSQL" width="28" height="28" style="display:block; border-radius:6px;">
+            </div>
+            <div class="brand-titles">
+                <div class="brand-name-row">
+                    <h1 class="brand-title">VarSQL</h1>
+                    <span id="schema-status-badge" class="status-pill status-draft">Espacio en blanco</span>
+                </div>
+                <p id="active-project-subtitle" class="brand-subtitle">Revisión y Motor SQL Local</p>
+            </div>
+        </div>
+
+        <!-- Selector de Proyecto y Acciones de Esquema -->
+        <div class="header-project-controls">
+            <label for="project-select" class="sr-only">Proyecto activo</label>
+            <div class="select-wrapper">
+                <svg class="select-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                </svg>
+                <select id="project-select" class="control-select" title="Seleccionar base de datos activa">
+                    <option value="">Sin proyecto activo</option>
+                </select>
+            </div>
+
+            <button id="btn-new-project" class="btn btn-secondary" type="button" title="Crear un nuevo proyecto de base de datos en blanco sin perder los existentes">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+                    <line x1="12" y1="5" x2="12" y2="19"></line>
+                    <line x1="5" y1="12" x2="19" y2="12"></line>
+                </svg>
+                <span>Nuevo Proyecto</span>
+            </button>
+
+            <button id="btn-toggle-nlp-bar" class="btn btn-secondary" type="button" title="Abrir o plegar el generador de esquemas desde texto en español">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+                    <path d="M12 20h9"></path>
+                    <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+                </svg>
+                <span>Texto a Esquema</span>
+            </button>
+
+            <button id="btn-generate-mock" class="btn btn-secondary" type="button" title="Poblar tablas con registros sintéticos coherentes respetando claves foráneas">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+                    <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+                    <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
+                    <line x1="12" y1="22.08" x2="12" y2="12"></line>
+                </svg>
+                <span>Mock Data</span>
+            </button>
+
+            <button id="btn-approve-deploy" class="btn btn-primary" type="button" title="Validar consistencia, ejecutar DDL transaccional y guardar base de datos SQLite en disco">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="20 6 9 17 4 12"></polyline>
+                </svg>
+                <span>Aprobar y Desplegar</span>
+            </button>
+        </div>
+
+        <!-- Conmutador Global Modo Estándar / Modo Tutor y Tema -->
+        <div class="header-mode-controls">
+            <div class="mode-switch-group" role="group" aria-label="Selector de modo operativo">
+                <button id="btn-mode-standard" class="mode-switch-btn active" type="button" data-mode="standard">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+                        <polyline points="16 18 22 12 16 6"></polyline>
+                        <polyline points="8 6 2 12 8 18"></polyline>
+                    </svg>
+                    <span>Modo Estándar</span>
+                </button>
+                <button id="btn-mode-tutor" class="mode-switch-btn" type="button" data-mode="tutor">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+                        <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path>
+                        <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path>
+                    </svg>
+                    <span>Modo Tutor</span>
+                </button>
+            </div>
+
+            <button id="btn-theme-toggle" class="btn-icon" type="button" title="Alternar entre tema oscuro VOR y tema claro laboratorio" aria-label="Alternar tema oscuro o claro">
+                <svg id="icon-theme-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="4.5"></circle>
+                    <line x1="12" y1="2" x2="12" y2="4.5"></line>
+                    <line x1="12" y1="19.5" x2="12" y2="22"></line>
+                    <line x1="4.93" y1="4.93" x2="6.7" y2="6.7"></line>
+                    <line x1="17.3" y1="17.3" x2="19.07" y2="19.07"></line>
+                    <line x1="2" y1="12" x2="4.5" y2="12"></line>
+                    <line x1="19.5" y1="12" x2="22" y2="12"></line>
+                    <line x1="4.93" y1="19.07" x2="6.7" y2="17.3"></line>
+                    <line x1="17.3" y1="6.7" x2="19.07" y2="4.93"></line>
+                </svg>
+                <svg id="icon-theme-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                </svg>
+            </button>
+        </div>
+    </header>
+
+    <!-- Barra Desplegable de Inferencia en Lenguaje Natural (Human-in-the-Loop) -->
+    <section id="nlp-command-bar" class="nlp-command-bar">
+        <div class="nlp-bar-inner">
+            <div class="nlp-input-column">
+                <div class="nlp-header-row">
+                    <h2 class="nlp-section-title">Motor de Inferencia Sintáctica y Heurística (Español &rarr; JSON Maestro)</h2>
+                    <div class="nlp-preset-pills">
+                        <span class="preset-label">Plantillas rápidas:</span>
+                        <button type="button" class="pill-btn" data-preset="taller">Taller Mecánico (1:N y N:M)</button>
+                        <button type="button" class="pill-btn" data-preset="clinica_1fn">Clínica con Violación 1FN + FLOAT</button>
+                        <button type="button" class="pill-btn" data-preset="biblioteca">Biblioteca y Préstamos</button>
+                        <button type="button" class="pill-btn" data-preset="comercio">Comercio y Facturación</button>
+                    </div>
+                </div>
+                <div class="nlp-textarea-row">
+                    <textarea id="nlp-prompt-input" class="nlp-textarea" rows="2" placeholder="Describe tu proyecto en español libre. Ejemplo: Necesito gestionar un taller mecánico donde los clientes traen varios vehículos, cada vehículo tiene reparaciones y en cada reparación se utilizan distintas piezas con un precio y stock."></textarea>
+                    <div class="nlp-action-stack">
+                        <input id="nlp-db-name-input" type="text" class="control-input" placeholder="nombre_proyecto_db" value="" title="Nombre del archivo .db de destino">
+                        <button id="btn-run-nlp-inference" class="btn btn-accent" type="button">
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+                            </svg>
+                            <span>Generar Boceto Estructural</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Espacio de Trabajo Tripartito Redimensionable -->
+    <main class="workbench-grid" id="workbench-grid">
+        <!-- Panel Lateral Izquierdo: Proyectos, Árbol de Esquema, Retos Tutor e Historial -->
+        <aside id="left-panel" class="panel-sidebar">
+            <div class="panel-tabs" role="tablist">
+                <button class="panel-tab active" type="button" data-left-tab="explorer-tree" role="tab">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+                        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                    </svg>
+                    <span>Proyectos</span>
+                </button>
+                <button class="panel-tab tutor-only" type="button" data-left-tab="tutor-challenges" role="tab">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"></polygon>
+                    </svg>
+                    <span>Retos</span>
+                </button>
+                <button class="panel-tab" type="button" data-left-tab="version-history" role="tab">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+                        <polyline points="1 4 1 10 7 10"></polyline>
+                        <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
+                        <polyline points="12 7 12 12 15 15"></polyline>
+                    </svg>
+                    <span>Versiones</span>
+                </button>
+            </div>
+
+            <!-- Pestaña 1: Proyectos .db y Árbol de Tablas -->
+            <div id="left-tab-explorer-tree" class="panel-tab-content active">
+                <div class="sidebar-section">
+                    <div class="workspace-folder-card">
+                        <div class="workspace-folder-top">
+                            <span class="workspace-folder-label">Carpeta Conectada</span>
+                            <button id="btn-open-workspace-explorer" class="btn-xs" type="button" title="Abrir esta carpeta en el Explorador de Windows">Ver en PC</button>
+                        </div>
+                        <div id="workspace-path-display" class="workspace-path-text" title="Ruta de almacenamiento local">workspaces/</div>
+                        <div class="workspace-folder-actions">
+                            <button id="btn-change-workspace" class="btn-tool" type="button" style="flex:1;" title="Conectar otra carpeta de tu PC para guardar y abrir proyectos">Cambiar Carpeta</button>
+                            <button id="btn-import-db" class="btn-tool" type="button" style="flex:1;" title="Abrir o importar un archivo .db / .sqlite existente desde tu PC">Abrir .db</button>
+                        </div>
+                        <div class="workspace-folder-actions">
+                            <button id="btn-save-db-as" class="btn-tool" type="button" style="flex:1;" title="Guardar una copia del proyecto actual (.db) en cualquier carpeta de tu PC">Guardar .db como...</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="sidebar-section sidebar-section-grow">
+                    <div class="sidebar-section-header">
+                        <h3 class="sidebar-heading">Proyectos en Carpeta</h3>
+                        <div style="display:flex; align-items:center; gap:6px;">
+                            <button id="btn-sidebar-new-project" class="btn-xs" type="button" title="Crear nuevo proyecto">+ Nuevo</button>
+                            <span id="db-count-badge" class="count-chip">0</span>
+                        </div>
+                    </div>
+                    <div id="databases-list" class="db-list"></div>
+                </div>
+            </div>
+
+            <!-- Pestaña 2: Escenarios de Práctica Guiada del Modo Tutor -->
+            <div id="left-tab-tutor-challenges" class="panel-tab-content">
+                <div class="sidebar-section">
+                    <div class="sidebar-section-header">
+                        <h3 class="sidebar-heading">Escenarios de Práctica Guiada</h3>
+                    </div>
+                    <p class="sidebar-helper-text">Retos progresivos con pistas escalonadas (Conceptual &rarr; Estructural &rarr; Solución Comentada) para practicar diseño relacional sin temor a errores.</p>
+                    <div id="challenges-list" class="challenges-list"></div>
+                </div>
+            </div>
+
+            <!-- Pestaña 3: Historial de Versiones y Migraciones (ALTER TABLE) -->
+            <div id="left-tab-version-history" class="panel-tab-content">
+                <div class="sidebar-section">
+                    <div class="sidebar-section-header">
+                        <h3 class="sidebar-heading">Historial de Migraciones</h3>
+                    </div>
+                    <p class="sidebar-helper-text">Instantáneas de evolución del esquema aprobado y scripts DDL / ALTER TABLE ejecutados.</p>
+                    <div id="migrations-timeline" class="migrations-timeline"></div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Divisor Redimensionable Izquierdo -->
+        <div class="panel-resizer" id="resizer-left" title="Arrastrar para redimensionar panel izquierdo"></div>
+
+        <!-- Área Central de Trabajo -->
+        <section id="center-panel" class="panel-center">
+            <!-- Conmutador de Vistas Centrales -->
+            <div class="center-view-bar">
+                <div class="view-switcher" role="tablist">
+                    <button class="view-tab active" type="button" data-center-view="canvas" role="tab">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+                            <rect x="2" y="3" width="6" height="5" rx="1"></rect>
+                            <rect x="16" y="3" width="6" height="5" rx="1"></rect>
+                            <rect x="9" y="16" width="6" height="5" rx="1"></rect>
+                            <path d="M5 8v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8"></path>
+                            <line x1="12" y1="13" x2="12" y2="16"></line>
+                        </svg>
+                        <span>Lienzo ER</span>
+                        <span id="badge-table-count" class="tab-counter">0</span>
+                    </button>
+                    <button class="view-tab" type="button" data-center-view="relational" role="tab">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+                            <rect x="2" y="9" width="6" height="6" rx="1"></rect>
+                            <polygon points="12,6 16,12 12,18 8,12"></polygon>
+                            <rect x="16" y="9" width="6" height="6" rx="1"></rect>
+                        </svg>
+                        <span>Diagrama Relacional</span>
+                    </button>
+                    <button class="view-tab" type="button" data-center-view="explorer" role="tab">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+                            <rect x="3" y="3" width="18" height="18" rx="2"></rect>
+                            <line x1="3" y1="9" x2="21" y2="9"></line>
+                            <line x1="3" y1="15" x2="21" y2="15"></line>
+                            <line x1="9" y1="3" x2="9" y2="21"></line>
+                            <line x1="15" y1="3" x2="15" y2="21"></line>
+                        </svg>
+                        <span>Explorador de Datos</span>
+                    </button>
+                    <button class="view-tab" type="button" data-center-view="sql" role="tab">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+                            <polyline points="4 17 10 11 4 5"></polyline>
+                            <line x1="12" y1="19" x2="20" y2="19"></line>
+                        </svg>
+                        <span>Editor SQL Dual</span>
+                    </button>
+                </div>
+
+                <!-- Telemetría Rápida y Controles de Paneles para Pantalla Dividida -->
+                <div class="center-telemetry">
+                    <span class="telemetry-item">
+                        <span class="telemetry-dot dot-cyan"></span>
+                        <strong id="metric-tables">0</strong> tablas
+                    </span>
+                    <span class="telemetry-item">
+                        <span class="telemetry-dot dot-indigo"></span>
+                        <strong id="metric-relations">0</strong> rel.
+                    </span>
+                    <button id="btn-telemetry-alerts" type="button" class="telemetry-alert-btn" title="Ver diagnósticos del Auditor Proactivo">
+                        <span class="telemetry-dot dot-amber"></span>
+                        <strong id="metric-alerts">0</strong> alertas
+                    </button>
+                    <button id="btn-toggle-left-panel" type="button" class="btn-icon-sm" title="Mostrar u ocultar panel izquierdo (útil en pantalla dividida)" aria-label="Alternar panel izquierdo">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                            <rect x="3" y="3" width="18" height="18" rx="2"></rect>
+                            <line x1="9" y1="3" x2="9" y2="21"></line>
+                        </svg>
+                    </button>
+                    <button id="btn-toggle-right-panel" type="button" class="btn-icon-sm" title="Mostrar u ocultar panel derecho (útil en pantalla dividida)" aria-label="Alternar panel derecho">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                            <rect x="3" y="3" width="18" height="18" rx="2"></rect>
+                            <line x1="15" y1="3" x2="15" y2="21"></line>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Banner Contextual del Modo Tutor (Visible cuando Modo Tutor está activo) -->
+            <div id="tutor-active-banner" class="tutor-context-banner hidden">
+                <div class="tutor-banner-icon">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+                        <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path>
+                        <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path>
+                    </svg>
+                </div>
+                <div class="tutor-banner-body">
+                    <strong id="tutor-banner-title">Modo Tutor Activo: Aprendizaje Contextual sobre tu Esquema</strong>
+                    <p id="tutor-banner-text">Haz clic en cualquier tabla, clave primaria (PK), clave foránea (FK), línea de relación o alerta del auditor para desplegar su explicación didáctica y comparativa Antes/Después.</p>
+                </div>
+            </div>
+
+            <!-- VISTA 1: LIENZO VISUAL ER INTERACTIVO -->
+            <div id="view-canvas" class="center-view-pane active">
+                <div class="canvas-toolbar">
+                    <div class="canvas-tool-group">
+                        <button id="btn-canvas-add-table" class="btn-tool" type="button">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+                                <line x1="12" y1="5" x2="12" y2="19"></line>
+                                <line x1="5" y1="12" x2="19" y2="12"></line>
+                            </svg>
+                            <span>Nueva Tabla</span>
+                        </button>
+                        <button id="btn-canvas-add-relation" class="btn-tool" type="button">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+                                <circle cx="6" cy="6" r="3"></circle>
+                                <circle cx="18" cy="18" r="3"></circle>
+                                <path d="M8.5 8.5l7 7"></path>
+                            </svg>
+                            <span>Vincular Tablas (FK)</span>
+                        </button>
+                        <button id="btn-canvas-autolayout" class="btn-tool" type="button">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+                                <rect x="3" y="3" width="7" height="7"></rect>
+                                <rect x="14" y="3" width="7" height="7"></rect>
+                                <rect x="8" y="14" width="8" height="7"></rect>
+                            </svg>
+                            <span>Reorganizar Plano</span>
+                        </button>
+                        <button id="btn-canvas-undo" class="btn-tool" type="button" title="Deshacer último cambio en el esquema (Ctrl+Z)" disabled>
+                            <span>&#8630; Deshacer</span>
+                        </button>
+                        <button id="btn-canvas-redo" class="btn-tool" type="button" title="Rehacer cambio en el esquema (Ctrl+Y)" disabled>
+                            <span>&#8631; Rehacer</span>
+                        </button>
+                    </div>
+
+                    <div class="canvas-legend">
+                        <span class="legend-chip"><i class="badge-pk">PK</i> Primaria</span>
+                        <span class="legend-chip"><i class="badge-fk">FK</i> Foránea</span>
+                        <span class="legend-chip"><i class="badge-uq">UQ</i> Único</span>
+                        <span class="legend-chip"><i class="badge-nm">N:M</i> Asociativa</span>
+                    </div>
+
+                    <div class="canvas-zoom-controls">
+                        <button id="btn-zoom-out" class="btn-icon-sm" type="button" title="Alejar plano">-</button>
+                        <span id="zoom-level-label" class="zoom-readout">100%</span>
+                        <button id="btn-zoom-in" class="btn-icon-sm" type="button" title="Acercar plano">+</button>
+                        <button id="btn-zoom-reset" class="btn-tool" type="button" title="Restablecer vista">Centrar</button>
+                    </div>
+                </div>
+
+                <!-- Área del Plano Cartográfico ER -->
+                <div id="er-canvas-viewport" class="er-canvas-viewport">
+                    <div id="er-canvas-stage" class="er-canvas-stage">
+                        <svg id="er-edges-svg" class="er-edges-svg" xmlns="http://www.w3.org/2000/svg"></svg>
+                        <div id="er-nodes-layer" class="er-nodes-layer"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- VISTA 1B: DIAGRAMA RELACIONAL (CONCEPTUAL CHEN + PASO A TABLAS CON CLAVES) -->
+            <div id="view-relational" class="center-view-pane">
+                <div class="sql-subtabs-bar" role="tablist" aria-label="Notación del Diagrama Relacional">
+                    <div class="sql-subtabs-group">
+                        <button type="button" class="sql-subtab-btn active" data-reldiag-mode="chen" role="tab">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                                <polygon points="12,3 21,12 12,21 3,12"></polygon>
+                            </svg>
+                            <span>Conceptual (Chen)</span>
+                        </button>
+                        <button type="button" class="sql-subtab-btn" data-reldiag-mode="tables" role="tab">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                                <rect x="3" y="4" width="18" height="16" rx="2"></rect>
+                                <line x1="3" y1="9" x2="21" y2="9"></line>
+                                <line x1="14" y1="9" x2="14" y2="20"></line>
+                            </svg>
+                            <span>Paso a Tablas (Claves)</span>
+                        </button>
+                    </div>
+
+                    <div class="sql-ddl-actions">
+                        <button id="btn-reldiag-toggle-attrs" class="btn-tool" type="button" title="Mostrar u ocultar los óvalos de atributos en notación Chen">Ocultar Atributos</button>
+                        <button id="btn-reldiag-reset" class="btn-tool" type="button" title="Recalcular disposición automática">Reorganizar</button>
+                        <button id="btn-reldiag-export-svg" class="btn-tool" type="button" title="Descargar diagrama vectorial en formato SVG">Exportar SVG</button>
+                        <button id="btn-reldiag-export-png" class="btn btn-primary btn-sm" type="button" title="Descargar imagen de alta resolución en formato PNG">Exportar PNG</button>
+                    </div>
+                </div>
+
+                <div class="canvas-toolbar">
+                    <div id="reldiag-legend" class="canvas-legend"></div>
+                    <div class="canvas-zoom-controls">
+                        <button id="btn-reldiag-zoom-out" class="btn-icon-sm" type="button" title="Alejar diagrama">-</button>
+                        <span id="reldiag-zoom-label" class="zoom-readout">100%</span>
+                        <button id="btn-reldiag-zoom-in" class="btn-icon-sm" type="button" title="Acercar diagrama">+</button>
+                        <button id="btn-reldiag-fit" class="btn-tool" type="button" title="Encuadrar todo el diagrama">Centrar</button>
+                    </div>
+                </div>
+
+                <div id="reldiag-viewport" class="reldiag-viewport">
+                    <svg id="reldiag-svg" class="reldiag-svg" xmlns="http://www.w3.org/2000/svg"></svg>
+                </div>
+            </div>
+
+            <!-- VISTA 2: EXPLORADOR DE DATOS RELACIONAL -->
+            <div id="view-explorer" class="center-view-pane">
+                <div class="explorer-toolbar">
+                    <div class="explorer-table-tabs" id="explorer-table-pills"></div>
+                    <div class="explorer-actions">
+                        <div class="search-box">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+                                <circle cx="11" cy="11" r="8"></circle>
+                                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                            </svg>
+                            <input id="explorer-search-input" type="search" class="control-input-sm" placeholder="Filtrar registros...">
+                        </div>
+                        <button id="btn-explorer-export-csv" class="btn-tool" type="button" title="Exportar todos los registros de la tabla activa a CSV">CSV</button>
+                        <button id="btn-explorer-export-json" class="btn-tool" type="button" title="Exportar todos los registros de la tabla activa a JSON">JSON</button>
+                        <button id="btn-explorer-export-sql" class="btn-tool" type="button" title="Exportar sentencias INSERT SQL de la tabla activa">SQL</button>
+                        <button id="btn-explorer-add-row" class="btn btn-secondary btn-sm" type="button">+ Nuevo Registro</button>
+                    </div>
+                </div>
+
+                <!-- Formulario Rápido de Inserción de Fila (Desplegable) -->
+                <div id="explorer-insert-drawer" class="explorer-insert-drawer hidden">
+                    <div class="insert-drawer-header">
+                        <h3 id="insert-drawer-title" class="drawer-heading">Insertar Nuevo Registro</h3>
+                        <button id="btn-close-insert-drawer" class="btn-icon-sm" type="button">&times;</button>
+                    </div>
+                    <div id="insert-drawer-fields" class="insert-drawer-fields"></div>
+                    <div class="insert-drawer-footer">
+                        <button id="btn-confirm-insert-row" class="btn btn-primary btn-sm" type="button">Guardar Registro en SQLite</button>
+                    </div>
+                </div>
+
+                <!-- Cuadrícula Paginada de Datos -->
+                <div class="explorer-grid-container">
+                    <table class="data-grid" id="explorer-data-grid">
+                        <thead id="explorer-grid-thead"></thead>
+                        <tbody id="explorer-grid-tbody"></tbody>
+                    </table>
+                </div>
+
+                <!-- Pie de Paginación del Explorador -->
+                <div class="explorer-footer">
+                    <div class="explorer-meta">
+                        <span id="explorer-row-summary">Mostrando registros</span>
+                        <span class="explorer-hint">Haz clic en cualquier celda <strong class="text-indigo">FK &rarr;</strong> para previsualizar el registro padre sin escribir JOIN, o doble clic en un valor para editarlo.</span>
+                    </div>
+                    <div class="pagination-controls">
+                        <button id="btn-page-prev" class="btn-tool" type="button">&larr; Anterior</button>
+                        <span id="explorer-page-indicator" class="page-indicator">Página 1 de 1</span>
+                        <button id="btn-page-next" class="btn-tool" type="button">Siguiente &rarr;</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- VISTA 3: EDITOR DE CÓDIGO SQL DUAL UNIFICADO (ESTRUCTURA DDL + CONSULTAS DML) -->
+            <div id="view-sql" class="center-view-pane">
+                <!-- Cabecera de Sub-Modos del Editor SQL Dual -->
+                <div class="sql-subtabs-bar" role="tablist" aria-label="Modos del Editor SQL Dual">
+                    <div class="sql-subtabs-group">
+                        <button type="button" class="sql-subtab-btn active" data-sql-subtab="ddl" role="tab">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                                <polyline points="16 18 22 12 16 6"></polyline>
+                                <polyline points="8 6 2 12 8 18"></polyline>
+                            </svg>
+                            <span>Estructura (DDL Completo)</span>
+                        </button>
+                        <button type="button" class="sql-subtab-btn" data-sql-subtab="dml" role="tab">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                                <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                            </svg>
+                            <span>Consultas (DML / SELECT)</span>
+                        </button>
+                    </div>
+                    <span id="sql-subtab-hint" class="sql-subtab-hint">Código DDL sincronizado bidireccionalmente con el Lienzo ER</span>
+                </div>
+
+                <!-- SUB-VISTA A: ESTRUCTURA (DDL COMPLETO MULTI-DIALECTO CON RESALTADO DE SINTAXIS) -->
+                <div id="sql-subpane-ddl" class="sql-subpane active">
+                    <div class="sql-ddl-toolbar">
+                        <div class="dialect-pills" role="group" aria-label="Selector de dialecto SQL">
+                            <button type="button" class="dialect-btn active" data-dialect="sqlite">SQLite</button>
+                            <button type="button" class="dialect-btn" data-dialect="mysql">MySQL</button>
+                            <button type="button" class="dialect-btn" data-dialect="sqlserver">SQL Server</button>
+                            <button type="button" class="dialect-btn" data-dialect="postgresql">PostgreSQL</button>
+                        </div>
+                        <div class="sql-ddl-actions">
+                            <button id="btn-copy-ddl" class="btn-tool" type="button" title="Copiar el script DDL completo al portapapeles">Copiar Script</button>
+                            <button id="btn-download-ddl" class="btn-tool" type="button" title="Guardar o descargar el script DDL como archivo .sql">Guardar / Descargar .sql</button>
+                            <button id="btn-apply-ddl-edits" class="btn btn-primary btn-sm" type="button" title="Sincronizar tus ediciones manuales del código DDL de vuelta al Lienzo ER y al Auditor">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
+                                <span>Aplicar Cambios al Esquema</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="sql-ddl-editor-wrap">
+                        <div class="sql-editor-box sql-editor-box-full">
+                            <div class="sql-editor-toolbar">
+                                <span id="ddl-editor-status-label" class="editor-label">Script DDL Completo · Seleccionable y Editable · Ctrl+Espacio: Autocompletar · Ctrl+S: Guardar .sql</span>
+                                <span id="ddl-dialect-badge" class="sql-filename-pill">SQLITE</span>
+                            </div>
+                            <div class="code-editor-shell code-editor-shell-ddl">
+                                <div id="ddl-line-gutter" class="code-line-gutter" aria-hidden="true"><div>1</div></div>
+                                <div class="code-editor-layers">
+                                    <pre id="ddl-highlight-layer" class="code-highlight-layer" aria-hidden="true"></pre>
+                                    <textarea id="ddl-code-textarea" class="sql-code-textarea" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off" aria-label="Editor DDL completo con resaltado de sintaxis"></textarea>
+                                </div>
+                                <div id="ddl-autocomplete-popup" class="sql-autocomplete-popup hidden" role="listbox" aria-label="Sugerencias DDL SQL"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- SUB-VISTA B: CONSULTAS INTERACTIVAS (DML / SELECT + RESULTADOS + TUTOR) -->
+                <div id="sql-subpane-dml" class="sql-subpane">
+                <!-- Barra de Archivos .sql y Herramientas de Código -->
+                <div class="sql-files-bar">
+                    <div class="sql-files-left">
+                        <span id="active-sql-filename" class="sql-filename-pill" title="Archivo SQL activo">consulta_actual.sql</span>
+                        <button id="btn-new-sql-file" class="btn-tool" type="button" title="Crear un nuevo archivo de script .sql en blanco">Nuevo .sql</button>
+                        <button id="btn-open-sql-file" class="btn-tool" type="button" title="Abrir un archivo .sql existente desde cualquier carpeta">Abrir .sql</button>
+                        <button id="btn-save-sql-file" class="btn-tool" type="button" title="Guardar archivo .sql (Ctrl+S)">Guardar .sql</button>
+                        <button id="btn-save-sql-as" class="btn-tool" type="button" title="Guardar script .sql en una carpeta específica">Guardar como...</button>
+                    </div>
+                    <div class="sql-presets-bar">
+                        <button type="button" class="pill-btn" data-sql-preset="join_complete">Cruce JOIN</button>
+                        <button type="button" class="pill-btn" data-sql-preset="full_scan_test">Probar EXPLAIN</button>
+                        <button type="button" class="pill-btn pill-danger" data-sql-preset="disaster_delete">Probar Escudo</button>
+                    </div>
+                </div>
+
+                <!-- Constructor Guiado por Reglas (Solo visible en Modo Tutor) -->
+                <div id="sql-guided-builder" class="sql-guided-builder tutor-only">
+                    <div class="guided-builder-header">
+                        <h3 class="builder-heading">Asistente Guiado por Reglas (Lenguaje Natural Estructurado &rarr; SQL)</h3>
+                        <div class="sql-presets-bar">
+                            <button type="button" class="pill-btn" data-sql-preset="group_summary">Agrupación GROUP BY</button>
+                        </div>
+                    </div>
+
+                    <div class="guided-builder-grid">
+                        <div class="builder-field">
+                            <label for="qb-table">1. Consultar tabla principal (FROM)</label>
+                            <select id="qb-table" class="control-select-sm"></select>
+                        </div>
+                        <div class="builder-field">
+                            <label for="qb-join">2. Cruzar con tabla relacionada (JOIN)</label>
+                            <select id="qb-join" class="control-select-sm">
+                                <option value="">Sin cruce JOIN</option>
+                            </select>
+                        </div>
+                        <div class="builder-field">
+                            <label for="qb-where-col">3. Filtrar por columna (WHERE)</label>
+                            <div class="inline-pair">
+                                <select id="qb-where-col" class="control-select-sm">
+                                    <option value="">Sin filtro</option>
+                                </select>
+                                <select id="qb-where-op" class="control-select-sm">
+                                    <option value="=">=</option>
+                                    <option value=">">&gt;</option>
+                                    <option value="<">&lt;</option>
+                                    <option value="LIKE">contiene</option>
+                                </select>
+                                <input id="qb-where-val" type="text" class="control-input-sm" placeholder="valor...">
+                            </div>
+                        </div>
+                        <div class="builder-field">
+                            <label for="qb-order-col">4. Ordenar resultado (ORDER BY)</label>
+                            <div class="inline-pair">
+                                <select id="qb-order-col" class="control-select-sm">
+                                    <option value="">Orden natural</option>
+                                </select>
+                                <select id="qb-order-dir" class="control-select-sm" style="max-width:78px;">
+                                    <option value="DESC">DESC</option>
+                                    <option value="ASC">ASC</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="builder-field builder-field-action">
+                            <label>&nbsp;</label>
+                            <button id="btn-apply-guided-sql" class="btn btn-primary btn-sm" type="button">Traducir a SQL</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Área del Editor de Código SQL Profesional -->
+                <div class="sql-editor-workspace">
+                    <div class="sql-editor-box">
+                        <div class="sql-editor-toolbar">
+                            <span class="editor-label">Editor SQL · Ctrl+Espacio: Autocompletar · Ctrl+Enter: Ejecutar</span>
+                            <div class="editor-autocomplete-chips" id="sql-autocomplete-chips"></div>
+                            <button id="btn-execute-sql" class="btn btn-primary btn-sm" type="button">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                                </svg>
+                                <span>Ejecutar SQL</span>
+                            </button>
+                        </div>
+                        <div class="code-editor-shell">
+                            <div id="sql-line-gutter" class="code-line-gutter" aria-hidden="true"><div>1</div></div>
+                            <div class="code-editor-layers">
+                                <pre id="sql-highlight-layer" class="code-highlight-layer" aria-hidden="true"></pre>
+                                <textarea id="sql-code-textarea" class="sql-code-textarea" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off">-- VarSQL · Editor SQL
+-- Escribe tus sentencias SQL o crea tu esquema en el Lienzo ER
+</textarea>
+                            </div>
+                            <div id="sql-autocomplete-popup" class="sql-autocomplete-popup hidden" role="listbox" aria-label="Sugerencias de autocompletado SQL"></div>
+                        </div>
+                    </div>
+
+                    <!-- Desglosador Lógico Paso a Paso (Solo visible en Modo Tutor) -->
+                    <div id="sql-tutor-decomposer" class="sql-tutor-decomposer tutor-only">
+                        <div class="decomposer-header">
+                            <h4 class="decomposer-title">Orden Lógico de Ejecución SQL (Motor Relacional) y Conjuntos JOIN</h4>
+                            <span class="decomposer-note">Cómo procesa internamente la consulta el motor paso a paso</span>
+                        </div>
+                        <div class="decomposer-body">
+                            <div id="sql-logical-steps" class="sql-logical-steps"></div>
+                            <div id="sql-venn-visualizer" class="sql-venn-visualizer"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Diagnóstico de EXPLAIN QUERY PLAN y Resultados -->
+                <div class="sql-results-section">
+                    <div id="sql-explain-banner" class="sql-explain-banner"></div>
+                    <div class="sql-results-header">
+                        <h4 id="sql-results-title" class="results-heading">Resultados de la Consulta</h4>
+                        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                            <div id="sql-results-pagination" class="pagination-controls hidden">
+                                <button id="btn-sql-page-prev" class="btn-xs" type="button">&larr; Ant.</button>
+                                <span id="sql-page-indicator" class="page-indicator">Pág. 1 / 1</span>
+                                <button id="btn-sql-page-next" class="btn-xs" type="button">Sig. &rarr;</button>
+                            </div>
+                            <button id="btn-sql-export-csv" class="btn-xs hidden" type="button" title="Exportar resultados visibles a CSV">CSV</button>
+                            <button id="btn-sql-export-json" class="btn-xs hidden" type="button" title="Exportar resultados visibles a JSON">JSON</button>
+                            <span id="sql-execution-metrics" class="execution-metrics">Listo para ejecutar</span>
+                        </div>
+                    </div>
+                    <div class="sql-results-table-wrap">
+                        <table class="data-grid" id="sql-results-grid">
+                            <thead id="sql-results-thead"></thead>
+                            <tbody id="sql-results-tbody"></tbody>
+                        </table>
+                    </div>
+                </div>
+                </div><!-- /#sql-subpane-dml -->
+            </div>
+        </section>
+
+        <!-- Divisor Redimensionable Derecho -->
+        <div class="panel-resizer" id="resizer-right" title="Arrastrar para redimensionar panel derecho"></div>
+
+        <!-- Panel Lateral Derecho Dinámico: Auditor Proactivo, Inspector de Propiedades y Modo Tutor -->
+        <aside id="right-panel" class="panel-inspector">
+            <div class="panel-tabs" role="tablist">
+                <button class="panel-tab active" type="button" data-right-tab="auditor" role="tab">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+                        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+                    </svg>
+                    <span>Auditor</span>
+                    <span id="right-tab-alert-badge" class="tab-badge-amber">0</span>
+                </button>
+                <button class="panel-tab" type="button" data-right-tab="inspector" role="tab">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+                        <circle cx="12" cy="12" r="3"></circle>
+                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                    </svg>
+                    <span>Inspector</span>
+                </button>
+                <button class="panel-tab tutor-only" type="button" data-right-tab="tutor" role="tab">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+                        <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path>
+                        <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path>
+                    </svg>
+                    <span>Tutor</span>
+                </button>
+            </div>
+
+            <!-- Pestaña Derecha 1: Auditor Proactivo -->
+            <div id="right-tab-auditor" class="panel-tab-content active">
+                <div class="inspector-section">
+                    <div class="inspector-section-header">
+                        <h3 class="sidebar-heading">Diagnóstico de Normalización, Claves y Rendimiento</h3>
+                    </div>
+                    <div id="auditor-alerts-container" class="auditor-alerts-list"></div>
+                </div>
+            </div>
+
+            <!-- Pestaña Derecha 2: Inspector y Edición Visual de Tabla / Columna / Relación -->
+            <div id="right-tab-inspector" class="panel-tab-content">
+                <div id="inspector-editor-container" class="inspector-section"></div>
+            </div>
+
+            <!-- Pestaña Derecha 3: Lecciones Contextuales del Modo Tutor -->
+            <div id="right-tab-tutor" class="panel-tab-content">
+                <div id="tutor-lesson-container" class="inspector-section"></div>
+            </div>
+        </aside>
+    </main>
+
+    <!-- Tarjeta Flotante de Previsualización de Clave Foránea (Registro Padre) -->
+    <div id="fk-preview-popover" class="fk-preview-popover hidden" role="dialog" aria-label="Previsualización de registro padre">
+        <div class="fk-popover-header">
+            <span id="fk-popover-title" class="fk-popover-title">Registro Padre</span>
+            <button id="btn-close-fk-popover" class="btn-icon-sm" type="button">&times;</button>
+        </div>
+        <div id="fk-popover-body" class="fk-popover-body"></div>
+    </div>
+
+    <!-- Modal Crítico del Escudo Anti-Desastres en Ejecución -->
+    <div id="disaster-shield-modal" class="modal-backdrop hidden" role="alertdialog" aria-modal="true" aria-labelledby="shield-modal-title">
+        <div class="modal-card modal-shield">
+            <div class="shield-header">
+                <div class="shield-icon" aria-hidden="true">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                        <line x1="12" y1="9" x2="12" y2="13"></line>
+                        <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                    </svg>
+                </div>
+                <div>
+                    <h2 id="shield-modal-title" class="shield-title">Escudo Anti-Desastres: Ejecución Interceptada</h2>
+                    <p id="shield-modal-subtitle" class="shield-subtitle">Sentencia destructiva bloqueada preventivamente antes de tocar el disco</p>
+                </div>
+            </div>
+
+            <div class="shield-body">
+                <p id="shield-modal-reason" class="shield-reason"></p>
+
+                <div class="shield-metrics-grid">
+                    <div class="shield-metric-box">
+                        <span class="shield-metric-value" id="shield-affected-rows">0</span>
+                        <span class="shield-metric-label">Filas afectadas directamente</span>
+                    </div>
+                    <div class="shield-metric-box">
+                        <span class="shield-metric-value" id="shield-dependent-rows">0</span>
+                        <span class="shield-metric-label">Registros hijos dependientes (FK)</span>
+                    </div>
+                </div>
+
+                <div id="shield-dependencies-list" class="shield-dependencies-list"></div>
+
+                <div class="shield-safe-box">
+                    <span class="shield-safe-label">Alternativa segura recomendada con filtro acotado:</span>
+                    <code id="shield-safe-sql" class="shield-safe-code"></code>
+                </div>
+            </div>
+
+            <div class="shield-footer">
+                <button id="btn-shield-cancel" class="btn btn-secondary" type="button">Cancelar Ejecución</button>
+                <button id="btn-shield-use-safe" class="btn btn-primary" type="button">Cargar Alternativa Segura en Editor</button>
+                <button id="btn-shield-force" class="btn btn-danger" type="button">Confirmar y Forzar Ejecución</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal para Vincular Tablas (Nueva Relación Clave Foránea) -->
+    <div id="relation-builder-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="rel-modal-title">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h2 id="rel-modal-title" class="modal-title">Vincular Tablas en el Diagrama ER</h2>
+                <button id="btn-close-rel-modal" class="btn-icon-sm" type="button">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-row">
+                    <label for="rel-parent-table">Tabla Padre (Lado 1 · Posee la Clave Primaria)</label>
+                    <select id="rel-parent-table" class="control-select"></select>
+                </div>
+                <div class="form-row">
+                    <label for="rel-child-table">Tabla Hija (Lado N · Recibirá la Clave Foránea)</label>
+                    <select id="rel-child-table" class="control-select"></select>
+                </div>
+                <div class="form-row">
+                    <label for="rel-cardinality">Tipo de Cardinalidad</label>
+                    <select id="rel-cardinality" class="control-select">
+                        <option value="1:N">1:N (Uno a Muchos · Inyecta FK en tabla hija)</option>
+                        <option value="N:M">N:M (Muchos a Muchos · Crea tabla asociativa intermedia)</option>
+                        <option value="1:1">1:1 (Uno a Uno · Inyecta FK UNIQUE)</option>
+                    </select>
+                </div>
+                <div class="form-row">
+                    <label for="rel-on-delete">Política de Integridad Referencial (ON DELETE)</label>
+                    <select id="rel-on-delete" class="control-select">
+                        <option value="RESTRICT">ON DELETE RESTRICT (Seguro: impide borrar padre con hijos)</option>
+                        <option value="CASCADE">ON DELETE CASCADE (Borra en cascada registros hijos)</option>
+                        <option value="SET NULL">ON DELETE SET NULL (Deja la FK en NULL)</option>
+                    </select>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button id="btn-cancel-rel-modal" class="btn btn-secondary" type="button">Cancelar</button>
+                <button id="btn-confirm-rel-modal" class="btn btn-primary" type="button">Crear Relación y Auditar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal para Crear Nuevo Proyecto -->
+    <div id="new-project-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="new-proj-modal-title">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h2 id="new-proj-modal-title" class="modal-title">Crear Nuevo Proyecto de Base de Datos</h2>
+                <button id="btn-close-new-proj-modal" class="btn-icon-sm" type="button">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-row">
+                    <label for="new-proj-name">Nombre técnico del proyecto (archivo .db)</label>
+                    <input id="new-proj-name" type="text" class="control-input" placeholder="ej. gestion_gimnasio">
+                </div>
+                <div class="form-row">
+                    <label for="new-proj-title">Título descriptivo</label>
+                    <input id="new-proj-title" type="text" class="control-input" placeholder="ej. Gestión de Gimnasio y Socios">
+                </div>
+                <div class="form-row">
+                    <label for="new-proj-prompt">Descripción inicial en español (opcional: si la dejas vacía, empezarás con un lienzo en blanco)</label>
+                    <textarea id="new-proj-prompt" class="nlp-textarea" rows="3" placeholder="Ejemplo: Necesito un gimnasio donde los socios se inscriben a varias clases impartidas por entrenadores..."></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button id="btn-cancel-new-proj-modal" class="btn btn-secondary" type="button">Cancelar</button>
+                <button id="btn-confirm-new-proj-modal" class="btn btn-primary" type="button">Crear Proyecto</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal de Confirmación para Eliminar Proyecto o Tabla -->
+    <div id="confirm-delete-modal" class="modal-backdrop hidden" role="alertdialog" aria-modal="true" aria-labelledby="confirm-del-title">
+        <div class="modal-card modal-shield" style="max-width:480px;">
+            <div class="shield-header">
+                <div class="shield-icon" aria-hidden="true">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="3 6 5 6 21 6"></polyline>
+                        <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path>
+                        <path d="M10 11v6"></path>
+                        <path d="M14 11v6"></path>
+                    </svg>
+                </div>
+                <div>
+                    <h2 id="confirm-del-title" class="shield-title">Confirmar Eliminación</h2>
+                    <p id="confirm-del-subtitle" class="shield-subtitle">Esta acción no se puede deshacer</p>
+                </div>
+            </div>
+            <div class="shield-body">
+                <p id="confirm-del-message" class="shield-reason"></p>
+            </div>
+            <div class="shield-footer">
+                <button id="btn-cancel-del-modal" class="btn btn-secondary" type="button">Cancelar</button>
+                <button id="btn-confirm-del-modal" class="btn btn-danger" type="button">Eliminar Definitivamente</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Contenedor de Notificaciones Toast -->
+    <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+    <!-- Barra de Estado Inferior Tipo IDE -->
+    <footer class="workbench-statusbar" id="workbench-statusbar" role="status">
+        <div class="statusbar-group">
+            <span class="statusbar-item">
+                <span id="status-engine-dot" class="statusbar-dot ok"></span>
+                <span>SQLite 3</span>
+            </span>
+            <span class="statusbar-sep"></span>
+            <span id="status-db-name" class="statusbar-item">nuevo_proyecto.db (borrador)</span>
+            <span class="statusbar-sep"></span>
+            <span id="status-counts" class="statusbar-item">0 tablas · 0 rel.</span>
+        </div>
+        <div class="statusbar-group">
+            <button id="status-auditor-btn" class="statusbar-btn" type="button" title="Abrir panel del Auditor VAR">
+                <span id="status-auditor-dot" class="statusbar-dot ok"></span>
+                <span id="status-auditor-text">VAR Check: 0 alertas</span>
+            </button>
+            <span class="statusbar-sep"></span>
+            <span id="status-mode-label" class="statusbar-item">Modo Estándar</span>
+            <span class="statusbar-sep"></span>
+            <span id="status-theme-label" class="statusbar-item">Tema Oscuro</span>
+            <span class="statusbar-sep"></span>
+            <span class="statusbar-item">VarSQL v1.4.0</span>
+        </div>
+    </footer>
+
+    <!-- Módulos JavaScript -->
+    <script src="/er_canvas.js?v=18"></script>
+    <script src="/relational_diagram.js?v=18"></script>
+    <script src="/tutor_module.js?v=18"></script>
+    <script src="/sql_editor.js?v=18"></script>
+    <script type="module" src="/app.js?v=18"></script>
+</body>
+</html>
