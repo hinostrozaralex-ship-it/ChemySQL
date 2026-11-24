@@ -61,12 +61,28 @@ VarSQL/
 
 ---
 
+## Descargar e instalar (Windows)
+
+Descarga el instalador oficial de Windows desde **GitHub Releases** (no requiere Python instalado):
+
+<p>
+  <a href="https://github.com/hinostrozaralex-ship-it/VarSQL/releases/download/v1.4.0/Setup-VarSQL-1.4.0.exe">
+    <img src="https://img.shields.io/badge/Descargar%20VarSQL%20v1.4.0-Windows%20(.exe)-10b981?style=for-the-badge&logo=windows&logoColor=white" alt="Descargar VarSQL para Windows" />
+  </a>
+</p>
+
+1. Haz clic en el botón superior para descargar **`Setup-VarSQL-1.4.0.exe`** (o visita la página de [Releases](https://github.com/hinostrozaralex-ship-it/VarSQL/releases/latest)).
+2. Ejecuta el instalador y sigue el asistente.
+3. Abre **VarSQL** desde el menú Inicio o el acceso directo del escritorio.
+
+---
+
 ## Instalación y uso desde código fuente
 
 ### 1. Clonar e instalar dependencias
 
 ```bash
-git clone https://github.com/<tu-usuario>/VarSQL.git
+git clone https://github.com/hinostrozaralex-ship-it/VarSQL.git
 cd VarSQL
 python -m venv .venv
 .venv\Scripts\activate
