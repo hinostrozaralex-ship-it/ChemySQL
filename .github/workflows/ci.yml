@@ -1,4 +1,4 @@
-name: VarSQL CI
+name: ChemySQL CI
 
 on:
   push:

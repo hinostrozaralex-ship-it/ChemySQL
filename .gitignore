@@ -15,7 +15,7 @@ installer_output/
 *.egg-info/
 
 # Configuración local de máquina/usuario
-varsql_config.json
+chemysql_config.json
 sgbd_config.json
 
 # Bases de datos y metadatos locales de usuario

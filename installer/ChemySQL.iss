@@ -1,8 +1,8 @@
-; Script de Instalador Clásico de Windows para VarSQL (Inno Setup 6)
-#define MyAppName "VarSQL"
+; Script de Instalador Clásico de Windows para ChemySQL (Inno Setup 6)
+#define MyAppName "ChemySQL"
 #define MyAppVersion "1.4.0"
-#define MyAppPublisher "VarSQL"
-#define MyAppExeName "VarSQL.exe"
+#define MyAppPublisher "ChemySQL"
+#define MyAppExeName "ChemySQL.exe"
 
 [Setup]
 AppId={{8F3B9C1A-4D2E-4A7B-9E6F-2B8C5D1A9042}
@@ -16,8 +16,8 @@ DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 OutputDir=..\installer_output
-OutputBaseFilename=Setup-VarSQL-{#MyAppVersion}
-SetupIconFile=..\assets\varsql.ico
+OutputBaseFilename=Setup-ChemySQL-{#MyAppVersion}
+SetupIconFile=..\assets\chemysql.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma2
 SolidCompression=yes
@@ -30,7 +30,7 @@ Name: "spanish"; MessagesFile: "compiler:Languages\Spanish.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 
 [Files]
-Source: "..\dist\VarSQL\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\dist\ChemySQL\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"

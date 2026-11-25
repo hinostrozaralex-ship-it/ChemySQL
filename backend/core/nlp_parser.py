@@ -961,7 +961,7 @@ class SpanishNLPParser:
             clean_db = to_snake_case(explicit_db_name)
             return clean_db, clean_db.replace("_", " ").title()
 
-        return "proyecto_relacional", "Proyecto Relacional VarSQL"
+        return "proyecto_relacional", "Proyecto Relacional ChemySQL"
 
     def _detect_entities(self, norm_text: str) -> List[str]:
         found: List[str] = []
@@ -1341,7 +1341,7 @@ class SpanishNLPParser:
         inferred_db = self._extract_explicit_db_name(raw_text)
         if inferred_db:
             final_db_name = inferred_db
-        elif db_name and to_snake_case(db_name) not in ("proyecto_varsql", "proyecto_sgbd", "nuevo_proyecto"):
+        elif db_name and to_snake_case(db_name) not in ("proyecto_chemysql", "proyecto_sgbd", "nuevo_proyecto"):
             final_db_name = to_snake_case(db_name)
         else:
             final_db_name = to_snake_case(db_name or "proyecto_estructurado")

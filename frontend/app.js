@@ -324,7 +324,7 @@ import { SchemaUndoManager } from "./modules/undo_manager.js";
         if (audDot && audText) {
             audDot.className = `statusbar-dot ${aCount === 0 ? "ok" : "warn"}`;
             audText.textContent =
-                aCount === 0 ? "VAR Check: 0 alertas" : `VAR Check: ${aCount} alerta${aCount === 1 ? "" : "s"}`;
+                aCount === 0 ? "Auditoría: 0 alertas" : `Auditoría: ${aCount} alerta${aCount === 1 ? "" : "s"}`;
         }
         if (modeEl) {
             modeEl.textContent = state.mode === "tutor" ? "Modo Tutor" : "Modo Estándar";

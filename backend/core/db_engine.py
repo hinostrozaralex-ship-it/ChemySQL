@@ -69,15 +69,15 @@ class DatabaseEngine:
         return target
 
     def _db_path(self, db_name: str) -> Path:
-        clean = to_snake_case(db_name) or "proyecto_varsql"
+        clean = to_snake_case(db_name) or "proyecto_chemysql"
         return self.workspaces_dir / f"{clean}.db"
 
     def _meta_path(self, db_name: str) -> Path:
-        clean = to_snake_case(db_name) or "proyecto_varsql"
+        clean = to_snake_case(db_name) or "proyecto_chemysql"
         return self.workspaces_dir / f"{clean}.schema.json"
 
     def _history_path(self, db_name: str) -> Path:
-        clean = to_snake_case(db_name) or "proyecto_varsql"
+        clean = to_snake_case(db_name) or "proyecto_chemysql"
         return self.workspaces_dir / f"{clean}.history.json"
 
     @contextmanager
@@ -690,7 +690,7 @@ class DatabaseEngine:
         if "email" in c or "correo" in c:
             person = nombres_persona[(idx - 1) % len(nombres_persona)]
             slug = to_snake_case(person).replace("_", ".")
-            return f"{slug}.{idx}@dominio-varsql.es"
+            return f"{slug}.{idx}@dominio-chemysql.es"
 
         if "username" in c:
             person = nombres_persona[(idx - 1) % len(nombres_persona)]

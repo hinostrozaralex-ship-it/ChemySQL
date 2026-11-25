@@ -1,6 +1,6 @@
 /* ==========================================================================
-   VarSQL · Estudio Relacional y Sala de Revisión SQL de Grado Empresarial
-   Sistema de Diseño Dual (Oscuro VOR / Claro Laboratorio) de Alta Precisión
+   ChemySQL · Estudio Relacional y Laboratorio SQL de Grado Empresarial
+   Sistema de Diseño Dual (Oscuro Grafito / Claro Laboratorio) de Alta Precisión
    ========================================================================== */
 
 :root,
@@ -2913,7 +2913,7 @@ html[data-viewport="mobile"] body {
 
 
 /* ==========================================================================
-   Barra de Estado Inferior Tipo IDE (VarSQL Statusbar)
+   Barra de Estado Inferior Tipo IDE (ChemySQL Statusbar)
    ========================================================================== */
 .workbench-statusbar {
     height: 26px;

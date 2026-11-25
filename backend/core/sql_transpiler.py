@@ -207,7 +207,7 @@ class SQLTranspiler:
         collation = contract.collation
         header_lines = [
             "-- ============================================================================",
-            f"-- VarSQL DDL Transpilado | Proyecto: {contract.title} ({contract.db_name})",
+            f"-- ChemySQL DDL Transpilado | Proyecto: {contract.title} ({contract.db_name})",
             f"-- Dialecto Destino: {target_dialect.upper()} | Versión de Esquema: v{contract.version}",
         ]
         if collation:
@@ -605,7 +605,7 @@ class SQLTranspiler:
                 old_cols = {c.name: c for c in old_tbl.columns}
 
                 if self._table_needs_rebuild(old_tbl, new_tbl, old_rel_map, new_rel_map):
-                    tmp_name = f"__varsql_tmp_{t_name}"
+                    tmp_name = f"__chemysql_tmp_{t_name}"
                     tmp_q = quote_identifier(tmp_name, "sqlite")
                     tbl_q_strict = quote_identifier(t_name, "sqlite")
 

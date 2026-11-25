@@ -111,7 +111,7 @@ class AuditAlertModel(BaseModel):
 
 
 class MasterSchemaContract(BaseModel):
-    db_name: str = Field(default="proyecto_varsql", description="Nombre técnico del archivo .db (sin extensión)")
+    db_name: str = Field(default="proyecto_chemysql", description="Nombre técnico del archivo .db (sin extensión)")
     title: str = Field(default="Nuevo Proyecto Relacional", description="Título legible del proyecto")
     description: str = Field(default="", description="Resumen funcional del proyecto")
     source_prompt: str = Field(default="", description="Descripción en lenguaje natural original")

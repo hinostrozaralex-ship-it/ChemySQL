@@ -1,12 +1,12 @@
 /**
- * Utilidades base, estado inicial, persistencia localStorage y cliente HTTP de VarSQL.
+ * Utilidades base, estado inicial, persistencia localStorage y cliente HTTP de ChemySQL.
  */
 
 export const STORAGE_KEYS = {
-    theme: "varsql_theme",
-    mode: "varsql_mode",
-    leftWidth: "varsql_left_width",
-    rightWidth: "varsql_right_width",
+    theme: "chemysql_theme",
+    mode: "chemysql_mode",
+    leftWidth: "chemysql_left_width",
+    rightWidth: "chemysql_right_width",
 };
 
 export const NLP_PRESETS = {

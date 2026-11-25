@@ -1,6 +1,6 @@
-# Contribuir a VarSQL
+# Contribuir a ChemySQL
 
-Gracias por tu interés en contribuir a **VarSQL**.
+Gracias por tu interés en contribuir a **ChemySQL**.
 
 ## Flujo recomendado
 
@@ -14,7 +14,7 @@ Gracias por tu interés en contribuir a **VarSQL**.
    pip install -r requirements.txt
    ```
 3. Mantén el principio rector del proyecto: **100 % determinista, offline y con validación de seguridad antes de tocar el disco**.
-4. Añade o actualiza pruebas en `tests/test_varsql.py` para cualquier cambio en el motor (`backend/core/`) o en la API (`backend/api/`).
+4. Añade o actualiza pruebas en `tests/test_chemysql.py` para cualquier cambio en el motor (`backend/core/`) o en la API (`backend/api/`).
 5. Ejecuta la suite completa antes de abrir tu Pull Request:
    ```bash
    python -m unittest discover -s tests -v

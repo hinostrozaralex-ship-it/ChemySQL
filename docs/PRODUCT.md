@@ -17,7 +17,7 @@ Backend local en Python (`FastAPI` + `Uvicorn` + `Pydantic` + `sqlite3`) ejecuta
 
 ## Product Purpose
 
-Concebir y operar un Sistema de Gestión de Bases de Datos (SGBD) relacional moderno, ligero, local y altamente responsivo (**VarSQL**) que combine la solidez técnica de motores SQL reales (empezando por SQLite local en archivos `.db`) con una experiencia visual, intuitiva, preventiva y pedagógica. El éxito significa cubrir de extremo a extremo el ciclo desde una idea en texto libre en español hasta un esquema auditado, aprobado explícitamente (*Human-in-the-Loop*), desplegado en disco, poblado con datos de prueba coherentes, explorado visualmente y consultado con red de seguridad anti-desastres.
+Concebir y operar un Sistema de Gestión de Bases de Datos (SGBD) relacional moderno, ligero, local y altamente responsivo (**ChemySQL**) que combine la solidez técnica de motores SQL reales (empezando por SQLite local en archivos `.db`) con una experiencia visual, intuitiva, preventiva y pedagógica. El éxito significa cubrir de extremo a extremo el ciclo desde una idea en texto libre en español hasta un esquema auditado, aprobado explícitamente (*Human-in-the-Loop*), desplegado en disco, poblado con datos de prueba coherentes, explorado visualmente y consultado con red de seguridad anti-desastres.
 
 ## Positioning
 
@@ -46,7 +46,7 @@ Un orquestador visual e inteligente **100 % determinista (sin modelos de IA ni A
 
 ## Evidence on Hand
 
-- Documento de Especificación Arquitectónica completo de **VarSQL**.
+- Documento de Especificación Arquitectónica completo de **ChemySQL**.
 - Base de datos de demostración pre-cargada al iniciar (`taller_mecanico.db` / proyectos de ejemplo) junto con retos interactivos del Modo Tutor (Biblioteca, Clínica/Reservas, Inventario y Facturación).
 - Todos los datos generados por la herramienta de *Mock Data* se etiquetan explícitamente como datos sintéticos de prueba.
 

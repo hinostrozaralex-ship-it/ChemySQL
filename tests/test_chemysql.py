@@ -1,5 +1,5 @@
 """
-Suite de pruebas automatizadas de VarSQL.
+Suite de pruebas automatizadas de ChemySQL.
 Cubre: NLP Parser, Auditor Proactivo, Transpilador Multi-Dialecto, Migraciones Reales,
 Tutor Engine, DatabaseEngine (SQLite) y seguridad de endpoints REST.
 

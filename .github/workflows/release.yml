@@ -31,21 +31,21 @@ jobs:
         shell: pwsh
         run: python -m unittest discover -s tests -v
 
-      - name: Build VarSQL executable
+      - name: Build ChemySQL executable
         shell: pwsh
-        run: python -m PyInstaller --noconfirm --clean VarSQL.spec
+        run: python -m PyInstaller --noconfirm --clean ChemySQL.spec
 
       - name: Build Windows installer (Inno Setup)
         shell: pwsh
         run: |
           $iscc = Get-Command iscc -ErrorAction SilentlyContinue
           if ($iscc) {
-            & $iscc.Source installer\VarSQL.iss
+            & $iscc.Source installer\ChemySQL.iss
           } elseif (Test-Path "C:\Program Files (x86)\Inno Setup 6\ISCC.exe") {
-            & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\VarSQL.iss
+            & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\ChemySQL.iss
           } else {
             choco install innosetup -y --no-progress
-            & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\VarSQL.iss
+            & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\ChemySQL.iss
           }
           Get-ChildItem installer_output
 
@@ -53,7 +53,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          name: VarSQL ${{ github.ref_name }}
+          name: ChemySQL ${{ github.ref_name }}
           generate_release_notes: true
           files: |
-            installer_output/Setup-VarSQL-*.exe
+            installer_output/Setup-ChemySQL-*.exe

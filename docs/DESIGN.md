@@ -1,5 +1,5 @@
 ---
-name: VarSQL
+name: ChemySQL
 description: Estudio cartográfico de ingeniería y planos técnicos para modelado relacional determinista, auditoría SQL y aprendizaje guiado.
 colors:
   blueprint-canvas: "#090e18"
@@ -81,13 +81,13 @@ components:
     height: "36px"
 ---
 
-# Design System: VarSQL
+# Design System: ChemySQL
 
 ## Overview
 
 **Creative North Star: "Estudio Cartográfico de Ingeniería y Planos Técnicos"**
 
-VarSQL concibe el modelado, la auditoría y la operación de bases de datos relacionales como una mesa de trabajo cartográfica y de planos de ingeniería de alta precisión. En lugar de presentar tarjetas flotantes decorativas o paneles administrativos genéricos, cada región de la pantalla funciona como un instrumento calibrado conectado en tiempo real al Contrato Maestro JSON: el texto libre en español se traduce en topología Entidad-Relación sobre un plano con retícula SVG CAD, mientras el panel lateral evalúa la integridad de claves, la 1ª Forma Normal y los planes de ejecución SQL.
+ChemySQL concibe el modelado, la auditoría y la operación de bases de datos relacionales como una mesa de trabajo cartográfica y de planos de ingeniería de alta precisión. En lugar de presentar tarjetas flotantes decorativas o paneles administrativos genéricos, cada región de la pantalla funciona como un instrumento calibrado conectado en tiempo real al Contrato Maestro JSON: el texto libre en español se traduce en topología Entidad-Relación sobre un plano con retícula SVG CAD, mientras el panel lateral evalúa la integridad de claves, la 1ª Forma Normal y los planes de ejecución SQL.
 
 La densidad es deliberadamente alta y escaneable, diseñada para sesiones prolongadas tanto de desarrolladores y arquitectos de datos (**Modo Estándar**) como de estudiantes en formación (**Modo Tutor**). El sistema rechaza el ornamento gratuito, los degradados decorativos en textos, las franjas laterales gruesas en tarjetas y el uso de emojis, confiando exclusivamente en iconografía vectorial de trazo uniforme (`1.75px`–`2px`), tipografía monoespaciada tabular y señalización cromática funcional.
 
@@ -130,7 +130,7 @@ La paleta combina superficies de pizarra azulada profunda (o papel técnico alab
 **Character:** Un emparejamiento funcional de ingeniería donde la sans-serif geométrica del sistema aporta lectura inmediata en controles, explicaciones didácticas y diagnósticos, mientras la monoespaciada gobierna identificadores `snake_case`, tipos SQL (`DECIMAL(10,2)`, `VARCHAR(150)`), sentencias DDL/DML y tablas de registros.
 
 ### Hierarchy
-- **Headline** (`700`, `20px`, `line-height: 1.2`, `letter-spacing: -0.02em`): Identidad principal del estudio (`VarSQL`) en la cabecera de instrumentación.
+- **Headline** (`700`, `20px`, `line-height: 1.2`, `letter-spacing: -0.02em`): Identidad principal del estudio (`ChemySQL`) en la cabecera de instrumentación.
 - **Title** (`700`, `16px`, `line-height: 1.35`): Títulos de módulos principales (Motor de Inferencia Sintáctica, modal del Escudo Anti-Desastres, diálogos de relación).
 - **Section Heading** (`700`, `14px`, `line-height: 1.4`): Encabezados de paneles laterales (`Bases de Datos Locales`, `Tablas del Esquema`, `Diagnóstico de Normalización, Claves y Rendimiento`).
 - **Body** (`400`, `14px`, `line-height: 1.5`): Explicaciones técnicas del auditor, lecciones del Modo Tutor y descripciones funcionales.

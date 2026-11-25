@@ -1,5 +1,5 @@
 """
-Punto de Entrada Unificado de VarSQL (Estudio Relacional Auditado y Sala de Revisión SQL).
+Punto de Entrada Unificado de ChemySQL (Estudio Relacional Auditado y Laboratorio SQL).
 Se ejecuta de forma nativa en Windows como una aplicación de escritorio independiente (mediante pywebview / WebView2),
 arrancando el motor FastAPI + SQLite en segundo plano en un puerto local libre y cerrándolo limpiamente al cerrar la ventana.
 """
@@ -54,7 +54,7 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     app = FastAPI(
-        title="VarSQL · Estudio Relacional Auditado y Sala de Revisión SQL",
+        title="ChemySQL · Estudio Relacional Auditado y Laboratorio SQL",
         description="Sistema de Gestión de Bases de Datos Relacional Determinista, Auditado y Didáctico",
         version=APP_VERSION,
         lifespan=lifespan,
@@ -109,7 +109,7 @@ def wait_for_server(url: str, timeout_s: float = 8.0) -> bool:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Aplicación de Escritorio VarSQL")
+    parser = argparse.ArgumentParser(description="Aplicación de Escritorio ChemySQL")
     parser.add_argument("--host", default="127.0.0.1", help="Host local (por defecto 127.0.0.1)")
     parser.add_argument("--port", type=int, default=8000, help="Puerto local preferido (por defecto 8000)")
     parser.add_argument(
@@ -130,7 +130,7 @@ def main() -> None:
     # Modo servidor web tradicional (solo si se solicita explícitamente con --web)
     if args.web:
         print("=" * 76)
-        print("  VarSQL · Modo Servidor Local")
+        print("  ChemySQL · Modo Servidor Local")
         print(f"  Servidor Local Activo en: {url}")
         print(f"  Directorio de Proyectos : {WORKSPACES_DIR}")
         print("=" * 76)
@@ -153,11 +153,11 @@ def main() -> None:
         server.should_exit = True
         server_thread.join(timeout=2.0)
         raise RuntimeError(
-            f"No se pudo iniciar el servidor local de VarSQL en {url} dentro del tiempo límite."
+            f"No se pudo iniciar el servidor local de ChemySQL en {url} dentro del tiempo límite."
         )
 
     window = webview.create_window(
-        title="VarSQL · Estudio Relacional y Auditoría SQL",
+        title="ChemySQL · Estudio Relacional y Auditoría SQL",
         url=url,
         width=1420,
         height=880,
@@ -171,7 +171,7 @@ def main() -> None:
     try:
         webview.start(debug=False)
     except Exception as exc:
-        print(f"[VarSQL] Ventana nativa no disponible ({exc}). Abriendo en navegador en {url}...")
+        print(f"[ChemySQL] Ventana nativa no disponible ({exc}). Abriendo en navegador en {url}...")
         webbrowser.open(url)
         try:
             server_thread.join()

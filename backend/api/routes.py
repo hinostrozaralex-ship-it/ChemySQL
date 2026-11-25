@@ -35,13 +35,13 @@ from backend.core.schema_model import (
 
 
 if getattr(sys, "frozen", False):
-    APP_USER_ROOT = Path.home() / "Documents" / "VarSQL"
+    APP_USER_ROOT = Path.home() / "Documents" / "ChemySQL"
     WORKSPACES_DIR = APP_USER_ROOT / "workspaces"
-    CONFIG_PATH = APP_USER_ROOT / "varsql_config.json"
+    CONFIG_PATH = APP_USER_ROOT / "chemysql_config.json"
 else:
     PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
     WORKSPACES_DIR = PROJECT_ROOT / "workspaces"
-    CONFIG_PATH = PROJECT_ROOT / "varsql_config.json"
+    CONFIG_PATH = PROJECT_ROOT / "chemysql_config.json"
 
 engine = DatabaseEngine(WORKSPACES_DIR, config_path=CONFIG_PATH)
 NATIVE_WINDOW: Any = None
@@ -73,7 +73,7 @@ def health_check() -> Dict[str, Any]:
     return {
         "status": "ok",
         "version": APP_VERSION,
-        "service": "VarSQL Deterministic Engine",
+        "service": "ChemySQL Deterministic Engine",
         "workspaces_dir": str(engine.workspaces_dir),
     }
 
