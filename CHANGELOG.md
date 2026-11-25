@@ -2,6 +2,11 @@
 
 Todos los cambios relevantes de **ChemySQL** se documentan en este archivo.
 
+## [1.4.1] - 2026-11-25
+
+### Cambiado
+* Rebranding completo del proyecto a **ChemySQL** (código, interfaz, emblema hexagonal molecular, icono multi-resolución, instalador Windows `Setup-ChemySQL-1.4.1.exe`, workflows de CI/Release y documentación).
+
 ## [1.4.0] - 2026-11-24
 
 ### Añadido

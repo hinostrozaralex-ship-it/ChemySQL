@@ -66,12 +66,12 @@ ChemySQL/
 Descarga el instalador oficial de Windows desde **GitHub Releases** (no requiere Python instalado):
 
 <p>
-  <a href="https://github.com/hinostrozaralex-ship-it/ChemySQL/releases/download/v1.4.0/Setup-ChemySQL-1.4.0.exe">
-    <img src="https://img.shields.io/badge/Descargar%20ChemySQL%20v1.4.0-Windows%20(.exe)-10b981?style=for-the-badge&logo=windows&logoColor=white" alt="Descargar ChemySQL para Windows" />
+  <a href="https://github.com/hinostrozaralex-ship-it/ChemySQL/releases/download/v1.4.1/Setup-ChemySQL-1.4.1.exe">
+    <img src="https://img.shields.io/badge/Descargar%20ChemySQL%20v1.4.1-Windows%20(.exe)-10b981?style=for-the-badge&logo=windows&logoColor=white" alt="Descargar ChemySQL para Windows" />
   </a>
 </p>
 
-1. Haz clic en el botón superior para descargar **`Setup-ChemySQL-1.4.0.exe`** (o visita la página de [Releases](https://github.com/hinostrozaralex-ship-it/ChemySQL/releases/latest)).
+1. Haz clic en el botón superior para descargar **`Setup-ChemySQL-1.4.1.exe`** (o visita la página de [Releases](https://github.com/hinostrozaralex-ship-it/ChemySQL/releases/latest)).
 2. Ejecuta el instalador y sigue el asistente.
 3. Abre **ChemySQL** desde el menú Inicio o el acceso directo del escritorio.
 
@@ -113,7 +113,7 @@ python -m unittest discover -s tests -v
 # 1. Generar ejecutable nativo en dist/ChemySQL/ChemySQL.exe
 python -m PyInstaller --noconfirm --clean ChemySQL.spec
 
-# 2. (Opcional) Generar instalador único Setup-ChemySQL-1.4.0.exe con Inno Setup 6
+# 2. (Opcional) Generar instalador único Setup-ChemySQL-1.4.1.exe con Inno Setup 6
 iscc installer\ChemySQL.iss
 ```
 
