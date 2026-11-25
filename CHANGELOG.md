@@ -2,6 +2,14 @@
 
 Todos los cambios relevantes de **ChemySQL** se documentan en este archivo.
 
+## [1.4.2] - 2026-11-25
+
+### Añadido y mejorado
+* **Autocompletado inline de línea completa (*Ghost Text*):** sugerencias deterministas contextuales basadas en el esquema activo y el script actual aceptables con `Tab` o `→`.
+* **Menú de sugerencias sin recortes:** posicionamiento `fixed` en el viewport con volteo automático por encima de la línea activa cuando se escribe cerca del borde inferior.
+* **Editor SQL más amplio y ergonómico:** línea activa centrada automáticamente con espacio libre inferior (*scroll beyond last line*), panel de Resultados compacto por defecto y divisor horizontal redimensionable.
+* **Barra de Inferencia Sintáctica desplegable:** arranca plegada para maximizar el espacio de trabajo y se abre/pliega en un clic desde `Texto a Esquema` o `Plegar`.
+
 ## [1.4.1] - 2026-11-25
 
 ### Cambiado

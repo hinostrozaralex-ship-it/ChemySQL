@@ -1766,17 +1766,21 @@ body[data-app-mode="standard"] .sql-editor-workspace {
 }
 
 .sql-editor-workspace {
+    flex: 1 1 0;
+    min-height: 220px;
     display: grid;
     grid-template-columns: 1.1fr 1fr;
     gap: 12px;
     padding: 12px 14px;
-    border-bottom: 1px solid var(--border-subtle);
     background-color: var(--bg-canvas);
+    overflow: hidden;
 }
 
 .sql-editor-box {
     display: flex;
     flex-direction: column;
+    min-height: 0;
+    height: 100%;
     border: 1px solid var(--border-subtle);
     border-radius: 7px;
     background-color: var(--bg-surface);
@@ -1808,8 +1812,8 @@ body[data-app-mode="standard"] .sql-editor-workspace {
 .code-editor-shell {
     position: relative;
     display: flex;
-    min-height: 220px;
-    max-height: 440px;
+    flex: 1;
+    min-height: 180px;
     background-color: var(--bg-surface);
     overflow: hidden;
 }
@@ -1828,7 +1832,7 @@ body[data-app-mode="standard"] .sql-editor-workspace {
 
 .code-line-gutter {
     width: 44px;
-    padding: 10px 8px 10px 0;
+    padding: 10px 8px 220px 0;
     background-color: var(--bg-surface-elevated);
     border-right: 1px solid var(--border-subtle);
     color: var(--text-muted);
@@ -1846,7 +1850,7 @@ body[data-app-mode="standard"] .sql-editor-workspace {
     position: relative;
     flex: 1;
     min-width: 0;
-    min-height: 210px;
+    min-height: 180px;
     overflow: hidden;
 }
 
@@ -1857,7 +1861,7 @@ body[data-app-mode="standard"] .sql-editor-workspace {
     width: 100%;
     height: 100%;
     margin: 0;
-    padding: 10px 14px;
+    padding: 10px 14px 220px 14px;
     border: none;
     font-family: var(--font-mono);
     font-size: 13px;
@@ -1913,11 +1917,17 @@ body[data-app-mode="standard"] .sql-editor-workspace {
     font-style: italic;
 }
 
+.hl-ghost {
+    color: var(--text-muted);
+    opacity: 0.55;
+    font-style: italic;
+}
+
 .sql-autocomplete-popup {
-    position: absolute;
-    z-index: 40;
+    position: fixed;
+    z-index: 200;
     min-width: 260px;
-    max-width: 420px;
+    max-width: 440px;
     max-height: 230px;
     overflow-y: auto;
     background-color: var(--bg-surface-elevated);
@@ -2079,8 +2089,27 @@ body[data-app-mode="standard"] .sql-editor-workspace {
     gap: 12px;
 }
 
+.sql-horizontal-resizer {
+    height: 6px;
+    cursor: row-resize;
+    background-color: var(--bg-canvas);
+    border-top: 1px solid var(--border-subtle);
+    border-bottom: 1px solid var(--border-subtle);
+    transition: background-color 0.14s ease;
+    flex-shrink: 0;
+}
+
+.sql-horizontal-resizer:hover,
+.sql-horizontal-resizer.resizing {
+    background-color: var(--accent-cyan-tint);
+    border-color: var(--accent-cyan);
+}
+
 .sql-results-section {
-    flex: 1;
+    flex: 0 0 auto;
+    height: 190px;
+    min-height: 100px;
+    max-height: 65%;
     display: flex;
     flex-direction: column;
     overflow: hidden;

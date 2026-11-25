@@ -1,6 +1,6 @@
 ; Script de Instalador Clásico de Windows para ChemySQL (Inno Setup 6)
 #define MyAppName "ChemySQL"
-#define MyAppVersion "1.4.1"
+#define MyAppVersion "1.4.2"
 #define MyAppPublisher "ChemySQL"
 #define MyAppExeName "ChemySQL.exe"
 

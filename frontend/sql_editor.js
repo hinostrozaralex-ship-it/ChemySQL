@@ -20,6 +20,7 @@ class SQLCodeEditorController {
         this.suggestions = [];
         this.activeIndex = 0;
         this.currentTokenRange = { start: 0, end: 0 };
+        this.ghostText = "";
 
         this.SQL_KEYWORDS = [
             "SELECT", "FROM", "WHERE", "INNER JOIN", "LEFT JOIN", "RIGHT JOIN", "JOIN", "ON",
@@ -80,6 +81,7 @@ class SQLCodeEditorController {
     _bindEvents() {
         this.textarea.addEventListener("input", () => {
             this.refreshHighlight();
+            this._keepActiveLineCentered();
             this.onChange(this.textarea.value);
             this._updateAutocomplete(false);
         });
@@ -91,11 +93,23 @@ class SQLCodeEditorController {
         this.textarea.addEventListener("keydown", (e) => this._handleKeyDown(e));
 
         this.textarea.addEventListener("blur", () => {
+            this.ghostText = "";
+            this.refreshHighlight();
             setTimeout(() => this.hidePopup(), 160);
         });
 
         this.textarea.addEventListener("click", () => {
             this.hidePopup();
+            this.refreshHighlight();
+        });
+
+        this.textarea.addEventListener("keyup", (e) => {
+            if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(e.key)) {
+                this.refreshHighlight();
+                if (["ArrowUp", "ArrowDown"].includes(e.key)) {
+                    this._keepActiveLineCentered();
+                }
+            }
         });
     }
 
@@ -155,6 +169,22 @@ class SQLCodeEditorController {
             return;
         }
 
+        // ArrowRight al final de la línea acepta el autocompletado inline de línea (Ghost Text)
+        if (
+            e.key === "ArrowRight" &&
+            !e.shiftKey &&
+            !e.ctrlKey &&
+            !e.altKey &&
+            this.ghostText &&
+            this.textarea.selectionStart === this.textarea.selectionEnd &&
+            (this.textarea.selectionStart === this.textarea.value.length ||
+                this.textarea.value.charAt(this.textarea.selectionStart) === "\n")
+        ) {
+            e.preventDefault();
+            this._acceptGhostText();
+            return;
+        }
+
         // Navegación dentro del menú de autocompletado si está abierto
         if (this.popup && !this.popup.classList.contains("hidden") && this.suggestions.length > 0) {
             if (e.key === "ArrowDown") {
@@ -176,15 +206,28 @@ class SQLCodeEditorController {
             }
             if (e.key === "Escape") {
                 e.preventDefault();
+                this.ghostText = "";
                 this.hidePopup();
+                this.refreshHighlight();
                 return;
             }
         }
 
-        // Regla de escritura: Tab inserta 4 espacios de indentación
+        if (e.key === "Escape" && this.ghostText) {
+            e.preventDefault();
+            this.ghostText = "";
+            this.refreshHighlight();
+            return;
+        }
+
+        // Tab acepta el autocompletado inline de línea si existe; si no, inserta 4 espacios
         if (e.key === "Tab") {
             e.preventDefault();
-            this.insertTokenAtCursor("    ");
+            if (this.ghostText) {
+                this._acceptGhostText();
+            } else {
+                this.insertTokenAtCursor("    ", false);
+            }
             return;
         }
 
@@ -206,6 +249,7 @@ class SQLCodeEditorController {
             const pos = start + insertText.length;
             this.textarea.setSelectionRange(pos, pos);
             this.refreshHighlight();
+            this._keepActiveLineCentered();
             this.onChange(this.textarea.value);
             return;
         }
@@ -383,10 +427,236 @@ class SQLCodeEditorController {
         const lineNum = lines.length;
         const colNum = lines[lines.length - 1].length;
         const lineHeight = 20;
-        const topPx = Math.min(this.textarea.clientHeight - 10, lineNum * lineHeight - this.textarea.scrollTop + 6);
-        const leftPx = Math.min(this.textarea.clientWidth - 260, Math.max(46, 46 + colNum * 7.8));
-        this.popup.style.top = `${Math.max(24, topPx)}px`;
-        this.popup.style.left = `${leftPx}px`;
+        const rect = this.textarea.getBoundingClientRect();
+
+        // Coordenadas reales en el viewport (position: fixed evita cualquier recorte por overflow: hidden)
+        const caretTop = rect.top + 10 + (lineNum - 1) * lineHeight - this.textarea.scrollTop;
+        const caretBottom = caretTop + lineHeight;
+        const caretLeft = rect.left + 14 + colNum * 7.8 - this.textarea.scrollLeft;
+
+        const popupEstHeight = Math.min(230, Math.max(44, this.suggestions.length * 30 + 12));
+        const spaceBelow = window.innerHeight - caretBottom - 16;
+        let topPx = caretBottom + 4;
+        if (spaceBelow < popupEstHeight && caretTop - popupEstHeight - 8 > 12) {
+            // Voltear automáticamente por encima de la línea del cursor si no cabe abajo
+            topPx = caretTop - popupEstHeight - 4;
+        } else {
+            topPx = Math.min(window.innerHeight - popupEstHeight - 12, Math.max(12, topPx));
+        }
+
+        const maxLeft = Math.max(12, window.innerWidth - 360);
+        const leftPx = Math.min(maxLeft, Math.max(rect.left + 8, caretLeft));
+
+        this.popup.style.top = `${Math.round(topPx)}px`;
+        this.popup.style.left = `${Math.round(leftPx)}px`;
+    }
+
+    _acceptGhostText() {
+        if (!this.textarea || !this.ghostText) return;
+        const start = this.textarea.selectionStart;
+        const val = this.textarea.value;
+        const toInsert = this.ghostText;
+        this.ghostText = "";
+        this.textarea.value = val.slice(0, start) + toInsert + val.slice(start);
+        const newPos = start + toInsert.length;
+        this.textarea.setSelectionRange(newPos, newPos);
+        this.textarea.focus();
+        this.hidePopup();
+        this.refreshHighlight();
+        this.onChange(this.textarea.value);
+    }
+
+    _computeLineSuggestion() {
+        if (!this.textarea || document.activeElement !== this.textarea) return "";
+        const pos = this.textarea.selectionStart;
+        if (pos !== this.textarea.selectionEnd) return "";
+        const val = this.textarea.value;
+        const nextChar = val.charAt(pos);
+        // Solo sugerir completado de línea cuando el cursor está al final de la línea actual
+        if (nextChar !== "" && nextChar !== "\n") return "";
+
+        const lineStart = val.lastIndexOf("\n", pos - 1) + 1;
+        const lineBefore = val.slice(lineStart, pos);
+        const trimmed = lineBefore.trim();
+        if (trimmed.length < 2 || trimmed.startsWith("--")) return "";
+
+        const contract = this.getSchemaContract();
+        const tables = (contract && contract.tables) || [];
+        const relations = (contract && contract.relations) || [];
+        const firstTbl = tables[0] ? tables[0].name : "nombre_tabla";
+        const firstPk =
+            tables[0] && tables[0].columns
+                ? (tables[0].columns.find((c) => c.is_pk) || tables[0].columns[0] || { name: "id" }).name
+                : "id";
+
+        // Detectar tablas y BD ya escritas arriba en el mismo script
+        const textBefore = val.slice(0, pos);
+        const dbMatch = textBefore.match(/CREATE\s+DATABASE\s+(?:IF\s+NOT\s+EXISTS\s+)?([A-Za-z_][A-Za-z0-9_]*)/i);
+        const scriptDb = dbMatch ? dbMatch[1] : (contract && contract.db_name) || "mi_base_datos";
+        const scriptTables = [...textBefore.matchAll(/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([A-Za-z_][A-Za-z0-9_]*)/gi)].map(
+            (m) => m[1]
+        );
+        const refParentTable = scriptTables[scriptTables.length - 2] || scriptTables[0] || firstTbl;
+
+        // Comprobar si estamos dentro de un bloque CREATE TABLE (... abierto
+        const lastCreateIdx = textBefore.toUpperCase().lastIndexOf("CREATE TABLE");
+        let insideCreateTable = false;
+        let currentCreateBlock = "";
+        if (lastCreateIdx >= 0) {
+            currentCreateBlock = textBefore.slice(lastCreateIdx);
+            const opens = (currentCreateBlock.match(/\(/g) || []).length;
+            const closes = (currentCreateBlock.match(/\)/g) || []).length;
+            insideCreateTable = opens > closes;
+        }
+
+        const upperTrim = trimmed.toUpperCase();
+
+        // 1. Sugerencias dentro de CREATE TABLE (...)
+        if (insideCreateTable) {
+            // Definición de columna con tipo completo seguida de espacio: "cod_pista SMALLINT "
+            const colTypeMatch = lineBefore.match(
+                /^\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+(?:VARCHAR\s*\(\d+\)|CHAR\s*\(\d+\)|DECIMAL\s*\(\d+\s*,\s*\d+\)|NUMERIC\s*\(\d+\s*,\s*\d+\)|SMALLINT|TINYINT|BIGINT|INTEGER|INT|DATE|TIME|DATETIME|BOOLEAN|TEXT)\s+$/i
+            );
+            if (colTypeMatch) {
+                const colName = colTypeMatch[1].toLowerCase();
+                const hasPkAlready = /PRIMARY\s+KEY/i.test(currentCreateBlock);
+                if (!hasPkAlready && (colName === "id" || colName.startsWith("cod_") || colName.startsWith("num_") || colName.startsWith("id_"))) {
+                    return "NOT NULL PRIMARY KEY,";
+                }
+                if (/(precio|cuota|importe|salario|total|coste)/i.test(colName)) {
+                    return `NOT NULL CHECK (${colName} >= 0),`;
+                }
+                if (/(dni|email|isbn|matricula)/i.test(colName)) {
+                    return "NOT NULL UNIQUE,";
+                }
+                return "NOT NULL,";
+            }
+            if (/^FOREIGN\s*K?E?Y?$/i.test(upperTrim)) {
+                const suffix = "FOREIGN KEY".slice(upperTrim.length);
+                return `${suffix} (col_id) REFERENCES ${refParentTable}(id) ON DELETE RESTRICT`;
+            }
+            if (/^PRIMARY\s*K?E?Y?$/i.test(upperTrim)) {
+                const suffix = "PRIMARY KEY".slice(upperTrim.length);
+                return `${suffix} (col1, col2)`;
+            }
+            if (/^CONSTRAINT\s+FK_?$/i.test(upperTrim)) {
+                return `tabla_col FOREIGN KEY (col_id) REFERENCES ${refParentTable}(id) ON DELETE RESTRICT`;
+            }
+            return "";
+        }
+
+        // 2. Sugerencias de sentencias DDL / DML a nivel raíz
+        const prefixRules = [
+            {
+                match: /^CREATE\s+DATAB?A?S?E?$/i,
+                complete: (m) => "CREATE DATABASE".slice(m.length) + ` ${scriptDb} COLLATE utf8mb4_spanish_ci;`,
+            },
+            {
+                match: /^CREATE\s+TABL?E?$/i,
+                complete: (m) => "CREATE TABLE".slice(m.length) + " nombre_tabla (\n    id INT NOT NULL PRIMARY KEY,\n    nombre VARCHAR(50) NOT NULL\n);",
+            },
+            {
+                match: /^CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([A-Za-z_][A-Za-z0-9_]*)$/i,
+                complete: () => " (\n    id INT NOT NULL PRIMARY KEY,\n    nombre VARCHAR(50) NOT NULL\n);",
+            },
+            {
+                match: /^CREATE\s+INDE?X?$/i,
+                complete: (m) => "CREATE INDEX".slice(m.length) + ` idx_${firstTbl}_${firstPk} ON ${firstTbl} (${firstPk});`,
+            },
+            {
+                match: /^USE$/i,
+                complete: () => ` ${scriptDb};`,
+            },
+            {
+                match: /^SELECT\s+\*\s+FR?O?M?$/i,
+                complete: (m) => {
+                    const tail = m.replace(/^SELECT\s+\*\s+/i, "");
+                    return "FROM".slice(tail.length) + ` ${firstTbl}\nLIMIT 25;`;
+                },
+            },
+            {
+                match: /^SELECT\s+\*\s+FROM\s+([A-Za-z_][A-Za-z0-9_]*)\s+WH?E?R?E?$/i,
+                complete: (m) => {
+                    const tblMatch = m.match(/FROM\s+([A-Za-z_][A-Za-z0-9_]*)\s+(WH?E?R?E?)$/i);
+                    const tName = tblMatch[1];
+                    const tObj = tables.find((t) => t.name.toLowerCase() === tName.toLowerCase());
+                    const pk = tObj && tObj.columns ? (tObj.columns.find((c) => c.is_pk) || tObj.columns[0] || { name: "id" }).name : "id";
+                    return "WHERE".slice(tblMatch[2].length) + ` ${pk} = 1;`;
+                },
+            },
+            {
+                match: /^(INNER|LEFT|RIGHT)\s+JO?I?N?$/i,
+                complete: (m) => {
+                    const parts = m.split(/\s+/);
+                    const rest = "JOIN".slice(parts[1].length);
+                    if (relations.length > 0) {
+                        const r = relations[0];
+                        return `${rest} ${r.target_table} ON ${r.source_table}.${r.source_column} = ${r.target_table}.${r.target_column}`;
+                    }
+                    return `${rest} tabla_destino ON tabla_a.id = tabla_destino.tabla_a_id`;
+                },
+            },
+            {
+                match: /^INSERT\s+IN?T?O?$/i,
+                complete: (m) => {
+                    const tail = m.replace(/^INSERT\s+/i, "");
+                    const cols =
+                        tables[0] && tables[0].columns
+                            ? tables[0].columns
+                                  .filter((c) => !(c.is_pk && c.auto_increment) && !c.computed_expression)
+                                  .slice(0, 3)
+                                  .map((c) => c.name)
+                            : ["nombre"];
+                    const vals = cols.map(() => "'valor'").join(", ");
+                    return "INTO".slice(tail.length) + ` ${firstTbl} (${cols.join(", ")}) VALUES (${vals});`;
+                },
+            },
+            {
+                match: /^UPDATE\s+([A-Za-z_][A-Za-z0-9_]*)\s+SE?T?$/i,
+                complete: (m) => {
+                    const parts = m.match(/^UPDATE\s+([A-Za-z_][A-Za-z0-9_]*)\s+(SE?T?)$/i);
+                    const tName = parts[1];
+                    const tObj = tables.find((t) => t.name.toLowerCase() === tName.toLowerCase());
+                    const pk = tObj && tObj.columns ? (tObj.columns.find((c) => c.is_pk) || tObj.columns[0] || { name: "id" }).name : "id";
+                    const editCol = tObj && tObj.columns ? (tObj.columns.find((c) => !c.is_pk) || { name: "nombre" }).name : "nombre";
+                    return "SET".slice(parts[2].length) + ` ${editCol} = 'nuevo_valor' WHERE ${pk} = 1;`;
+                },
+            },
+            {
+                match: /^DELETE\s+FR?O?M?$/i,
+                complete: (m) => {
+                    const tail = m.replace(/^DELETE\s+/i, "");
+                    return "FROM".slice(tail.length) + ` ${firstTbl} WHERE ${firstPk} = 1;`;
+                },
+            },
+            {
+                match: /^ALTER\s+TABL?E?$/i,
+                complete: (m) => "ALTER TABLE".slice(m.length) + ` ${firstTbl} ADD COLUMN nueva_col VARCHAR(100);`,
+            },
+            {
+                match: /^ORDER\s+BY?$/i,
+                complete: (m) => "ORDER BY".slice(m.length) + ` ${firstPk} DESC LIMIT 25;`,
+            },
+            {
+                match: /^GROUP\s+BY?$/i,
+                complete: (m) => "GROUP BY".slice(m.length) + ` ${firstPk};`,
+            },
+        ];
+
+        for (const rule of prefixRules) {
+            if (rule.match.test(trimmed)) {
+                return rule.complete(trimmed);
+            }
+        }
+
+        // Si el usuario escribió "CREATE" solo (exactamente como en su captura)
+        if (upperTrim === "CREATE") {
+            return " TABLE nombre_tabla (\n    id INT NOT NULL PRIMARY KEY,\n    nombre VARCHAR(50) NOT NULL\n);";
+        }
+        if (upperTrim === "SELECT") {
+            return ` * FROM ${firstTbl} LIMIT 25;`;
+        }
+        return "";
     }
 
     _applySuggestion(item) {
@@ -411,14 +681,47 @@ class SQLCodeEditorController {
     refreshHighlight() {
         if (!this.textarea || !this.highlightLayer || !this.gutter) return;
         const code = this.textarea.value;
-        const lineCount = Math.max(1, code.split("\n").length);
+        this.ghostText = this._computeLineSuggestion();
+
+        const pos = this.textarea.selectionStart;
+        const displayCode = this.ghostText ? code.slice(0, pos) + this.ghostText + code.slice(pos) : code;
+        const lineCount = Math.max(1, displayCode.split("\n").length);
         let gutterHtml = "";
         for (let i = 1; i <= lineCount; i++) {
             gutterHtml += `<div>${i}</div>`;
         }
         this.gutter.innerHTML = gutterHtml;
-        this.highlightLayer.innerHTML = this._highlightSQL(code) + "\n";
+
+        if (this.ghostText) {
+            const beforeHtml = this._highlightSQL(code.slice(0, pos));
+            const ghostHtml = `<span class="hl-ghost">${this._escape(this.ghostText)}</span>`;
+            const afterHtml = this._highlightSQL(code.slice(pos));
+            this.highlightLayer.innerHTML = beforeHtml + ghostHtml + afterHtml + "\n";
+        } else {
+            this.highlightLayer.innerHTML = this._highlightSQL(code) + "\n";
+        }
         this._syncScroll();
+    }
+
+    _keepActiveLineCentered() {
+        if (!this.textarea) return;
+        const pos = this.textarea.selectionStart;
+        const lineNum = this.textarea.value.slice(0, pos).split("\n").length;
+        const lineHeight = 20;
+        const caretY = 10 + (lineNum - 1) * lineHeight;
+        const visibleH = this.textarea.clientHeight;
+        if (visibleH <= 0) return;
+
+        const relY = caretY - this.textarea.scrollTop;
+        // Mantener la línea activa ligeramente centrada (~45% de la altura visible):
+        // si baja más allá del 56% del área visible, desliza el código hacia arriba dejando espacio libre abajo
+        if (relY > visibleH * 0.56) {
+            this.textarea.scrollTop = Math.max(0, Math.round(caretY - visibleH * 0.45));
+            this._syncScroll();
+        } else if (relY < visibleH * 0.12 && this.textarea.scrollTop > 0) {
+            this.textarea.scrollTop = Math.max(0, Math.round(caretY - visibleH * 0.25));
+            this._syncScroll();
+        }
     }
 
     _syncScroll() {

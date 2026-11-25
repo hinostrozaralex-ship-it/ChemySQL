@@ -1753,11 +1753,28 @@ import { SchemaUndoManager } from "./modules/undo_manager.js";
             });
         }
 
-        document.getElementById("btn-toggle-nlp-bar").addEventListener("click", () => {
+        const toggleNlpBar = (forceHidden = null) => {
             const bar = document.getElementById("nlp-command-bar");
-            bar.classList.toggle("hidden");
-            document.body.classList.toggle("nlp-collapsed", bar.classList.contains("hidden"));
-        });
+            const btn = document.getElementById("btn-toggle-nlp-bar");
+            if (!bar) return;
+            const shouldHide = forceHidden !== null ? forceHidden : !bar.classList.contains("hidden");
+            bar.classList.toggle("hidden", shouldHide);
+            document.body.classList.toggle("nlp-collapsed", shouldHide);
+            if (btn) {
+                btn.classList.toggle("active", !shouldHide);
+                btn.setAttribute("aria-expanded", String(!shouldHide));
+            }
+            if (!shouldHide) {
+                const promptEl = document.getElementById("nlp-prompt-input");
+                if (promptEl) promptEl.focus();
+            }
+        };
+
+        document.getElementById("btn-toggle-nlp-bar").addEventListener("click", () => toggleNlpBar());
+        const btnCloseNlp = document.getElementById("btn-close-nlp-bar");
+        if (btnCloseNlp) {
+            btnCloseNlp.addEventListener("click", () => toggleNlpBar(true));
+        }
 
         document.getElementById("project-select").addEventListener("change", (e) => {
             const val = e.target.value;
@@ -2726,6 +2743,9 @@ import { SchemaUndoManager } from "./modules/undo_manager.js";
     function bindResizablePanels() {
         const leftResizer = document.getElementById("resizer-left");
         const rightResizer = document.getElementById("resizer-right");
+        const sqlResultsResizer = document.getElementById("resizer-sql-results");
+        const sqlResultsSection = document.getElementById("sql-results-section");
+        const sqlSubpaneDml = document.getElementById("sql-subpane-dml");
         let activeResizer = null;
 
         leftResizer.addEventListener("mousedown", () => {
@@ -2738,6 +2758,14 @@ import { SchemaUndoManager } from "./modules/undo_manager.js";
             rightResizer.classList.add("resizing");
         });
 
+        if (sqlResultsResizer && sqlResultsSection && sqlSubpaneDml) {
+            sqlResultsResizer.addEventListener("mousedown", (e) => {
+                e.preventDefault();
+                activeResizer = "sql-results";
+                sqlResultsResizer.classList.add("resizing");
+            });
+        }
+
         window.addEventListener("mousemove", (e) => {
             if (!activeResizer) return;
             if (activeResizer === "left") {
@@ -2748,6 +2776,11 @@ import { SchemaUndoManager } from "./modules/undo_manager.js";
                 const w = Math.max(290, Math.min(560, window.innerWidth - e.clientX));
                 document.documentElement.style.setProperty("--sidebar-right-width", `${w}px`);
                 writeStorage(STORAGE_KEYS.rightWidth, w);
+            } else if (activeResizer === "sql-results" && sqlResultsSection && sqlSubpaneDml) {
+                const rect = sqlSubpaneDml.getBoundingClientRect();
+                const maxH = Math.max(180, Math.round(rect.height * 0.65));
+                const nextH = Math.max(100, Math.min(maxH, Math.round(rect.bottom - e.clientY)));
+                sqlResultsSection.style.height = `${nextH}px`;
             }
         });
 
@@ -2755,6 +2788,7 @@ import { SchemaUndoManager } from "./modules/undo_manager.js";
             if (!activeResizer) return;
             leftResizer.classList.remove("resizing");
             rightResizer.classList.remove("resizing");
+            if (sqlResultsResizer) sqlResultsResizer.classList.remove("resizing");
             activeResizer = null;
         });
     }

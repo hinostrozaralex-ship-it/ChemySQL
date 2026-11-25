@@ -7,7 +7,7 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
     <link rel="stylesheet" href="/styles.css?v=18">
 </head>
-<body data-app-mode="standard">
+<body data-app-mode="standard" class="nlp-collapsed">
     <!-- Cabecera Principal de Instrumentación -->
     <header class="workbench-header">
         <div class="brand-cluster">
@@ -107,7 +107,7 @@
     </header>
 
     <!-- Barra Desplegable de Inferencia en Lenguaje Natural (Human-in-the-Loop) -->
-    <section id="nlp-command-bar" class="nlp-command-bar">
+    <section id="nlp-command-bar" class="nlp-command-bar hidden">
         <div class="nlp-bar-inner">
             <div class="nlp-input-column">
                 <div class="nlp-header-row">
@@ -118,6 +118,7 @@
                         <button type="button" class="pill-btn" data-preset="clinica_1fn">Clínica con Violación 1FN + FLOAT</button>
                         <button type="button" class="pill-btn" data-preset="biblioteca">Biblioteca y Préstamos</button>
                         <button type="button" class="pill-btn" data-preset="comercio">Comercio y Facturación</button>
+                        <button id="btn-close-nlp-bar" type="button" class="btn-xs" title="Plegar barra de inferencia para ganar espacio">Plegar</button>
                     </div>
                 </div>
                 <div class="nlp-textarea-row">
@@ -599,7 +600,7 @@
                 <div class="sql-editor-workspace">
                     <div class="sql-editor-box">
                         <div class="sql-editor-toolbar">
-                            <span class="editor-label">Editor SQL · Ctrl+Espacio: Autocompletar · Ctrl+Enter: Ejecutar</span>
+                            <span class="editor-label">Editor SQL · Tab / &rarr;: Completar línea · Ctrl+Espacio: Sugerencias · Ctrl+Enter: Ejecutar</span>
                             <div class="editor-autocomplete-chips" id="sql-autocomplete-chips"></div>
                             <button id="btn-execute-sql" class="btn btn-primary btn-sm" type="button">
                                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -633,8 +634,11 @@
                     </div>
                 </div>
 
+                <!-- Divisor Horizontal Redimensionable entre Editor SQL y Resultados -->
+                <div id="resizer-sql-results" class="sql-horizontal-resizer" title="Arrastrar para cambiar la altura de Resultados de la Consulta"></div>
+
                 <!-- Diagnóstico de EXPLAIN QUERY PLAN y Resultados -->
-                <div class="sql-results-section">
+                <div id="sql-results-section" class="sql-results-section">
                     <div id="sql-explain-banner" class="sql-explain-banner"></div>
                     <div class="sql-results-header">
                         <h4 id="sql-results-title" class="results-heading">Resultados de la Consulta</h4>
@@ -887,15 +891,15 @@
             <span class="statusbar-sep"></span>
             <span id="status-theme-label" class="statusbar-item">Tema Oscuro</span>
             <span class="statusbar-sep"></span>
-            <span class="statusbar-item">ChemySQL v1.4.1</span>
+            <span class="statusbar-item">ChemySQL v1.4.2</span>
         </div>
     </footer>
 
     <!-- Módulos JavaScript -->
-    <script src="/er_canvas.js?v=18"></script>
-    <script src="/relational_diagram.js?v=18"></script>
-    <script src="/tutor_module.js?v=18"></script>
-    <script src="/sql_editor.js?v=18"></script>
-    <script type="module" src="/app.js?v=18"></script>
+    <script src="/er_canvas.js?v=20"></script>
+    <script src="/relational_diagram.js?v=20"></script>
+    <script src="/tutor_module.js?v=20"></script>
+    <script src="/sql_editor.js?v=20"></script>
+    <script type="module" src="/app.js?v=20"></script>
 </body>
 </html>
