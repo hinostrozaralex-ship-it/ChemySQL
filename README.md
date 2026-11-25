@@ -26,7 +26,7 @@ Combina el rigor de un motor SQL real (SQLite local) con un **auditor relacional
 
 ## Características principales
 
-* **Motor Determinista Texto → Esquema (Español):** transforma descripciones en español libre o especificaciones técnicas estructuradas en un *Contrato Maestro JSON* con entidades, tipos semánticos (`DECIMAL(10,2)`, `DATE`, `BOOLEAN`, `VARCHAR UNIQUE`), claves primarias simples/compuestas, columnas calculadas y relaciones `1:1`, `1:N` y `N:M`.
+* **Motor Determinista Texto → Esquema (Español, barra desplegable):** transforma descripciones en español libre o especificaciones técnicas estructuradas en un *Contrato Maestro JSON* con entidades, tipos semánticos (`DECIMAL(10,2)`, `DATE`, `BOOLEAN`, `VARCHAR UNIQUE`), claves primarias simples/compuestas, columnas calculadas y relaciones `1:1`, `1:N` y `N:M`.
 * **Lienzo ER Interactivo + Undo/Redo (`Ctrl+Z` / `Ctrl+Y`):** arrastre de nodos, edición inline, vinculación visual de claves foráneas y confirmación *Human-in-the-Loop* antes de materializar en disco.
 * **Diagrama Relacional Académico:** notación **Conceptual (Chen)** (entidades, rombos editables, atributos PK/UK/derivados) y **Paso a Tablas (Claves)** con exportación vectorial **SVG** y **PNG** en alta resolución.
 * **Auditor Proactivo + Escudo Anti-Desastres:**
@@ -34,7 +34,7 @@ Combina el rigor de un motor SQL real (SQLite local) con un **auditor relacional
   * Intercepta `UPDATE`/`DELETE` sin `WHERE` (incluyendo `WITH ... DELETE` y condiciones triviales `OR 1=1`) y `DROP TABLE`, cuantificando filas afectadas y dependencias FK antes de ejecutar.
 * **Migraciones SQLite Reales:** soporta evolución de esquemas con preservación de datos mediante reconstrucción transaccional de tablas (`RENAME → CREATE → INSERT SELECT → DROP`).
 * **Explorador de Datos Relacional:** cuadrícula paginada editable con soporte de **PK compuestas**, previsualización flotante de registros padre en celdas `FK`, estilos `NULL` y exportación a **CSV, JSON y SQL (`INSERT`)**.
-* **Editor SQL Dual Multi-Dialecto:** sincronización bidireccional **DDL ↔ Lienzo ER** con transpilación a **SQLite, MySQL, PostgreSQL y SQL Server**, consultas DML paginadas, análisis `EXPLAIN QUERY PLAN` con creación de índices en 1 clic y autocompletado inteligente.
+* **Editor SQL Dual Multi-Dialecto:** sincronización bidireccional **DDL ↔ Lienzo ER** con transpilación a **SQLite, MySQL, PostgreSQL y SQL Server**, **autocompletado inline de línea completa (*Ghost Text* con `Tab`/`→`)**, scroll con línea activa centrada, panel de resultados redimensionable, consultas DML paginadas y análisis `EXPLAIN QUERY PLAN` con creación de índices en 1 clic.
 * **Modo Tutor vs. Modo Estándar:** tarjetas pedagógicas vivas sobre tu propio esquema, desglosador paso a paso del orden lógico de ejecución SQL, visualizador de conjuntos `INNER` / `LEFT` / `RIGHT` / `FULL` / `CROSS JOIN` y retos guiados.
 * **Interfaz Dual Profesional:** **Tema Oscuro (Grafito)** y **Tema Claro (Laboratorio)** con barra de estado tipo IDE y persistencia de preferencias.
 
