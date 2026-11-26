@@ -15,6 +15,7 @@ class ERCanvasController {
         this.onSelectElement = options.onSelectElement || (() => {});
         this.onSchemaMutated = options.onSchemaMutated || (() => {});
         this.onDeleteTable = options.onDeleteTable || (() => {});
+        this.onLayoutChanged = options.onLayoutChanged || (() => {});
 
         this.contract = null;
         this.selectedElement = null; // { type: 'table' | 'column' | 'relation', table, column, relation }
@@ -53,16 +54,24 @@ class ERCanvasController {
     }
 
     fitToViewport() {
-        if (!this.contract || !this.contract.tables || this.contract.tables.length === 0 || !this.viewport) {
+        const hasTables = this.contract && this.contract.tables && this.contract.tables.length > 0;
+        const hasViews = this.contract && this.contract.views && this.contract.views.length > 0;
+        if ((!hasTables && !hasViews) || !this.viewport) {
             this.setZoom(1.0);
             return;
         }
         const NODE_W = 236;
         let maxX = 400;
         let maxY = 300;
-        this.contract.tables.forEach((tbl) => {
+        (this.contract.tables || []).forEach((tbl) => {
             const xEnd = (tbl.position_x || 20) + NODE_W + 24;
             const yEnd = (tbl.position_y || 20) + 74 + (tbl.columns ? tbl.columns.length : 5) * 28;
+            if (xEnd > maxX) maxX = xEnd;
+            if (yEnd > maxY) maxY = yEnd;
+        });
+        (this.contract.views || []).forEach((vw) => {
+            const xEnd = (vw.position_x || 60) + NODE_W + 24;
+            const yEnd = (vw.position_y || 380) + 120;
             if (xEnd > maxX) maxX = xEnd;
             if (yEnd > maxY) maxY = yEnd;
         });
@@ -90,7 +99,7 @@ class ERCanvasController {
 
         this.render(this.contract);
         this.fitToViewport();
-        this.onSchemaMutated(this.contract, false);
+        this.onLayoutChanged(this.contract);
     }
 
     render(contract) {
@@ -302,6 +311,76 @@ class ERCanvasController {
             this.nodesLayer.appendChild(nodeEl);
         });
 
+        // Renderizar Vistas Virtuales (VIEW) con estilo diferenciado
+        (contract.views || []).forEach((vw) => {
+            const vNode = document.createElement("article");
+            vNode.className = "er-table-node er-view-node";
+            vNode.dataset.view = vw.name;
+            if (
+                this.selectedElement &&
+                this.selectedElement.type === "view" &&
+                this.selectedElement.view === vw.name
+            ) {
+                vNode.classList.add("selected");
+            }
+            vNode.style.left = `${vw.position_x || 120}px`;
+            vNode.style.top = `${vw.position_y || 420}px`;
+
+            const vHeader = document.createElement("div");
+            vHeader.className = "er-node-header";
+            vHeader.innerHTML = `
+                <div class="er-node-title-wrap">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                        <circle cx="12" cy="12" r="3"></circle>
+                    </svg>
+                    <span class="er-node-title">${this._escape(vw.name)}</span>
+                </div>
+                <span class="badge-view" title="Vista SQL Virtual (Solo lectura)">VIEW</span>
+            `;
+
+            vHeader.addEventListener("mousedown", (e) => {
+                if (e.button !== 0) return;
+                e.stopPropagation();
+                this.selectElement({ type: "view", view: vw.name, data: vw });
+                this.dragState = {
+                    table: vw,
+                    nodeEl: vNode,
+                    startX: e.clientX,
+                    startY: e.clientY,
+                    origX: vw.position_x || 120,
+                    origY: vw.position_y || 420,
+                };
+            });
+
+            const vBody = document.createElement("div");
+            vBody.className = "er-node-columns";
+            const previewCols = (vw.columns || []).slice(0, 5);
+            if (previewCols.length > 0) {
+                previewCols.forEach((cn) => {
+                    const row = document.createElement("div");
+                    row.className = "er-col-item";
+                    row.innerHTML = `<div class="er-col-left"><span class="er-col-name">${this._escape(cn)}</span></div><div class="er-col-right"><span class="er-col-type">VIEW</span></div>`;
+                    vBody.appendChild(row);
+                });
+            } else {
+                const snippet = String(vw.select_sql || "").replace(/\s+/g, " ").slice(0, 48);
+                const row = document.createElement("div");
+                row.className = "er-col-item";
+                row.innerHTML = `<span class="er-col-type" style="white-space:normal;">${this._escape(snippet)}...</span>`;
+                vBody.appendChild(row);
+            }
+
+            const vFooter = document.createElement("div");
+            vFooter.className = "er-node-footer";
+            vFooter.innerHTML = `<span>Consulta virtual</span><span>Solo lectura</span>`;
+
+            vNode.appendChild(vHeader);
+            vNode.appendChild(vBody);
+            vNode.appendChild(vFooter);
+            this.nodesLayer.appendChild(vNode);
+        });
+
         this._renderEdges(dangerousRelations);
     }
 
@@ -438,6 +517,9 @@ class ERCanvasController {
 
         const newX = Math.max(12, Math.round(this.dragState.origX + dx));
         const newY = Math.max(12, Math.round(this.dragState.origY + dy));
+        if (newX !== this.dragState.origX || newY !== this.dragState.origY) {
+            this.dragState.moved = true;
+        }
 
         this.dragState.table.position_x = newX;
         this.dragState.table.position_y = newY;
@@ -449,7 +531,11 @@ class ERCanvasController {
 
     _onMouseUp() {
         if (!this.dragState) return;
+        const wasMoved = Boolean(this.dragState.moved);
         this.dragState = null;
+        if (wasMoved && this.contract) {
+            this.onLayoutChanged(this.contract);
+        }
     }
 
     _startInlineEdit(spanEl, initialValue, onCommit) {

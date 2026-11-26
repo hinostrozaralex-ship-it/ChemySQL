@@ -6,12 +6,14 @@ y migraciones (ALTER TABLE), genera datos sintéticos coherentes en español y e
 
 from __future__ import annotations
 from contextlib import contextmanager
+import base64
 import csv
 from datetime import date, datetime, timedelta
 import io
 import json
 from pathlib import Path
 import re
+import shutil
 import sqlite3
 import time
 from typing import Any, Dict, Iterator, List, Literal, Optional, Tuple
@@ -23,6 +25,7 @@ from backend.core.schema_model import (
     MasterSchemaContract,
     RelationModel,
     TableModel,
+    ViewModel,
 )
 from backend.core.sql_transpiler import (
     SQLTranspiler,
@@ -380,6 +383,30 @@ class DatabaseEngine:
                     )
                 )
 
+            cur.execute(
+                "SELECT name, sql FROM sqlite_master WHERE type='view' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+            )
+            views: List[ViewModel] = []
+            for v_idx, (v_name, v_sql) in enumerate(cur.fetchall()):
+                m_as = re.search(r"\bAS\b\s+(.+)$", v_sql or "", flags=re.IGNORECASE | re.DOTALL)
+                sel_sql = m_as.group(1).strip().rstrip(";") if m_as else (v_sql or "")
+                v_cols: List[str] = []
+                try:
+                    cur.execute(f"PRAGMA table_info({quote_identifier(v_name, 'sqlite')})")
+                    v_cols = [r[1] for r in cur.fetchall() if r[1]]
+                except sqlite3.Error:
+                    pass
+                views.append(
+                    ViewModel(
+                        name=v_name,
+                        select_sql=sel_sql,
+                        columns=v_cols,
+                        description=f"Vista virtual en {db_name}.db",
+                        position_x=60.0 + (v_idx % 3) * 340.0,
+                        position_y=420.0 + (v_idx // 3) * 210.0,
+                    )
+                )
+
         return MasterSchemaContract(
             db_name=db_name,
             title=db_name.replace("_", " ").title(),
@@ -388,6 +415,7 @@ class DatabaseEngine:
             is_deployed=True,
             version=1,
             tables=tables,
+            views=views,
             relations=relations,
         )
 
@@ -396,11 +424,12 @@ class DatabaseEngine:
         contract: MasterSchemaContract,
         populate_mock_data: bool = False,
         mock_rows_per_table: int = 12,
+        confirmed_destructive: bool = False,
     ) -> Dict[str, Any]:
         """
-        Valida la consistencia del esquema, registra la versión y script de migración (ALTER TABLE),
-        materializa las tablas en el archivo SQLite .db dentro de una transacción segura
-        y opcionalmente puebla datos de prueba coherentes.
+        Valida la consistencia del esquema, detecta migraciones destructivas sobre tablas pobladas,
+        crea respaldo automático .db.bak antes de modificar estructuras existentes, registra la versión,
+        materializa las tablas en SQLite dentro de una transacción segura y opcionalmente genera Mock Data.
         """
         clean_db = to_snake_case(contract.db_name) or "proyecto_sgbd"
         contract.db_name = clean_db
@@ -417,14 +446,57 @@ class DatabaseEngine:
                 )
             except Exception:
                 old_contract = None
+        elif db_file.exists():
+            try:
+                old_contract = self._introspect_sqlite_file(clean_db, db_file)
+            except Exception:
+                old_contract = None
 
         migration_diff = self.transpiler.generate_migration_diff(old_contract, contract)
+
+        # Escudo Pre-Migración: si se van a eliminar tablas o columnas que ya contienen registros en disco,
+        # exigir confirmación explícita antes de ejecutar la migración.
+        if old_contract and db_file.exists() and migration_diff.get("is_destructive") and not confirmed_destructive:
+            affected_tables_check = set(migration_diff.get("dropped_tables", []))
+            for dc in migration_diff.get("dropped_columns", []):
+                affected_tables_check.add(dc["table"])
+
+            affected_rows = 0
+            with self._connect(db_file) as conn_chk:
+                cur_chk = conn_chk.cursor()
+                for t_chk in affected_tables_check:
+                    try:
+                        cur_chk.execute(f"SELECT COUNT(*) FROM {quote_identifier(t_chk, 'sqlite')}")
+                        affected_rows += int(cur_chk.fetchone()[0])
+                    except sqlite3.Error:
+                        pass
+
+            if affected_rows > 0:
+                return {
+                    "requires_migration_confirmation": True,
+                    "migration_warning": {
+                        "db_name": clean_db,
+                        "affected_rows": affected_rows,
+                        "dropped_tables": migration_diff.get("dropped_tables", []),
+                        "dropped_columns": migration_diff.get("dropped_columns", []),
+                        "summary": migration_diff.get("summary", ""),
+                    },
+                    "schema_contract": contract.model_dump(),
+                }
+
+        # Crear respaldo automático .db.bak antes de aplicar cambios estructurales sobre una BD existente
+        backup_path: Optional[str] = None
+        if old_contract and db_file.exists() and migration_diff.get("alter_statements"):
+            backup_file = self._create_pre_migration_backup(clean_db, db_file, old_contract.version)
+            if backup_file:
+                backup_path = str(backup_file)
+
         if old_contract:
             contract.version = old_contract.version + 1
         else:
             contract.version = 1
 
-        ddl_bundle = self.transpiler.transpile_ddl(contract, "sqlite")
+        ddl_bundle = self.transpiler.transpile_ddl(contract, "sqlite", force_idempotent=True)
 
         # Si la base de datos ya existía y es una evolución de esquema, aplicar migraciones
         # (CREATE TABLE, ALTER TABLE ADD COLUMN o reconstrucción transaccional de tabla) sin perder datos
@@ -468,13 +540,170 @@ class DatabaseEngine:
             mock_summary = self.generate_mock_data(clean_db, rows_per_table=mock_rows_per_table)
 
         return {
+            "requires_migration_confirmation": False,
             "db_name": clean_db,
             "db_path": str(db_file),
+            "backup_path": backup_path,
             "version": contract.version,
             "schema_contract": contract.model_dump(),
             "ddl_executed": ddl_bundle["full_sql"],
             "migration": migration_diff,
             "mock_data": mock_summary,
+        }
+
+    def _create_pre_migration_backup(self, clean_db: str, db_file: Path, old_version: int) -> Optional[Path]:
+        """Guarda una copia automática .db.bak en workspaces/backups/ antes de migrar (conserva las últimas 5)."""
+        try:
+            backups_dir = self.workspaces_dir / "backups"
+            backups_dir.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            bak_file = backups_dir / f"{clean_db}_v{old_version}_{stamp}.db.bak"
+            shutil.copy2(db_file, bak_file)
+            existing_baks = sorted(
+                backups_dir.glob(f"{clean_db}_v*.db.bak"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            for stale in existing_baks[5:]:
+                try:
+                    stale.unlink()
+                except OSError:
+                    pass
+            return bak_file
+        except Exception:
+            return None
+
+    def save_schema_layout(self, contract: MasterSchemaContract) -> Dict[str, Any]:
+        """
+        Persiste coordenadas X/Y del Lienzo ER y diagram_layout (posiciones Chen/Tablas y verbos)
+        en .schema.json sin alterar la versión SQLite ni marcar como pendiente si ya estaba desplegado.
+        """
+        clean_db = to_snake_case(contract.db_name) or "proyecto_chemysql"
+        meta_file = self._meta_path(clean_db)
+        db_file = self._db_path(clean_db)
+        if meta_file.exists():
+            try:
+                saved_contract = MasterSchemaContract.model_validate(
+                    json.loads(meta_file.read_text(encoding="utf-8"))
+                )
+                pos_by_name = {t.name: (t.position_x, t.position_y) for t in contract.tables}
+                for tbl in saved_contract.tables:
+                    if tbl.name in pos_by_name:
+                        tbl.position_x, tbl.position_y = pos_by_name[tbl.name]
+                vpos_by_name = {v.name: (v.position_x, v.position_y) for v in (contract.views or [])}
+                for vw in saved_contract.views:
+                    if vw.name in vpos_by_name:
+                        vw.position_x, vw.position_y = vpos_by_name[vw.name]
+                saved_contract.diagram_layout = dict(contract.diagram_layout or {})
+                saved_contract.ddl_style = contract.ddl_style
+                if contract.ddl_identifier:
+                    saved_contract.ddl_identifier = contract.ddl_identifier
+                saved_contract.is_deployed = db_file.exists()
+                meta_file.write_text(
+                    json.dumps(saved_contract.model_dump(), ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+                return {"saved": True, "db_name": clean_db, "is_deployed": saved_contract.is_deployed}
+            except Exception:
+                pass
+        return {"saved": False, "db_name": clean_db, "is_deployed": False}
+
+    def export_project_bundle(
+        self,
+        contract: MasterSchemaContract,
+        include_data: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Empaqueta el proyecto completo en formato portable .chemysql (JSON):
+        incluye el Contrato Maestro (con posiciones ER, Chen/Paso a Tablas, verbos, reglas y notas),
+        el historial completo de migraciones y opcionalmente la base SQLite .db embebida en Base64.
+        """
+        from backend import APP_VERSION
+
+        clean_db = to_snake_case(contract.db_name) or "proyecto_chemysql"
+        contract.db_name = clean_db
+        hist_file = self._history_path(clean_db)
+        raw_history: List[Dict[str, Any]] = []
+        if hist_file.exists():
+            try:
+                raw_history = json.loads(hist_file.read_text(encoding="utf-8"))
+            except Exception:
+                raw_history = []
+
+        db_file = self._db_path(clean_db)
+        sqlite_b64: Optional[str] = None
+        if include_data and db_file.exists() and db_file.stat().st_size <= 25 * 1024 * 1024:
+            sqlite_b64 = base64.b64encode(db_file.read_bytes()).decode("ascii")
+
+        bundle = {
+            "format": "chemysql-project",
+            "format_version": 1,
+            "app_version": APP_VERSION,
+            "exported_at": datetime.now().isoformat(timespec="seconds"),
+            "schema_contract": contract.model_dump(),
+            "history": raw_history,
+            "sqlite_db_base64": sqlite_b64,
+        }
+        content = json.dumps(bundle, ensure_ascii=False, indent=2)
+        return {
+            "filename": f"{clean_db}.chemysql",
+            "mime_type": "application/json;charset=utf-8",
+            "content": content,
+            "has_embedded_db": sqlite_b64 is not None,
+        }
+
+    def import_project_bundle(self, raw_content: str) -> Dict[str, Any]:
+        """
+        Restaura un archivo .chemysql (o .schema.json) en la carpeta activa de workspaces/,
+        reconstruyendo el Contrato Maestro, su maquetación ER/Chen/Tablas, historial y archivo .db.
+        """
+        data = json.loads(raw_content)
+        if not isinstance(data, dict):
+            raise ValueError("El archivo de proyecto no contiene un objeto JSON válido.")
+
+        if data.get("format") == "chemysql-project" and "schema_contract" in data:
+            contract = MasterSchemaContract.model_validate(data["schema_contract"])
+            history = data.get("history") if isinstance(data.get("history"), list) else []
+            sqlite_b64 = data.get("sqlite_db_base64")
+        else:
+            contract = MasterSchemaContract.model_validate(data)
+            history = []
+            sqlite_b64 = None
+
+        clean_db = to_snake_case(contract.db_name) or "proyecto_importado"
+        contract.db_name = clean_db
+        db_file = self._db_path(clean_db)
+        meta_file = self._meta_path(clean_db)
+        hist_file = self._history_path(clean_db)
+
+        restored_db = False
+        if isinstance(sqlite_b64, str) and sqlite_b64.strip():
+            db_bytes = base64.b64decode(sqlite_b64.encode("ascii"))
+            if not db_bytes.startswith(b"SQLite format 3\x00"):
+                raise ValueError("El bloque binario embebido no es una base de datos SQLite válida.")
+            if db_file.exists():
+                self._create_pre_migration_backup(clean_db, db_file, contract.version)
+            db_file.write_bytes(db_bytes)
+            restored_db = True
+
+        contract.is_deployed = db_file.exists()
+        self.auditor.audit_schema(contract)
+
+        meta_file.write_text(
+            json.dumps(contract.model_dump(), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        if history:
+            hist_file.write_text(json.dumps(history, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        return {
+            "imported": True,
+            "db_name": clean_db,
+            "restored_sqlite_db": restored_db,
+            "schema_contract": contract.model_dump(),
+            "ddl_previews": self.transpiler.build_all_ddl_previews(contract),
+            "history": self.get_version_history(clean_db),
+            "databases": self.list_databases(),
         }
 
     def _append_version_history(
@@ -881,26 +1110,40 @@ class DatabaseEngine:
         page_size: int = 25,
         search: str = "",
     ) -> Dict[str, Any]:
-        """Obtiene los registros paginados de una tabla junto con sus metadatos de claves primarias y foráneas."""
+        """Obtiene los registros paginados de una tabla o vista junto con sus metadatos."""
         contract = self.load_or_introspect_schema(db_name)
         tbl = next((t for t in contract.tables if t.name == table_name), None)
-        if not tbl:
-            raise ValueError(f"La tabla '{table_name}' no existe en '{db_name}'.")
+        vw = None if tbl else next((v for v in (contract.views or []) if v.name == table_name), None)
+        if not tbl and not vw:
+            raise ValueError(f"La tabla o vista '{table_name}' no existe en '{db_name}'.")
 
         db_file = self._db_path(db_name)
         offset = max(0, (page - 1) * page_size)
-        tbl_q = quote_identifier(tbl.name, "sqlite")
+        target_name = tbl.name if tbl else vw.name  # type: ignore[union-attr]
+        tbl_q = quote_identifier(target_name, "sqlite")
 
         with self._connect(db_file) as conn:
             conn.row_factory = sqlite3.Row
             cur = conn.cursor()
 
+            if tbl:
+                col_names_for_search = [c.name for c in tbl.columns]
+            else:
+                if vw and vw.columns:
+                    col_names_for_search = list(vw.columns)
+                else:
+                    cur.execute(f"SELECT * FROM {tbl_q} LIMIT 0")
+                    col_names_for_search = [d[0] for d in (cur.description or [])]
+
             where_clause = ""
             params: List[Any] = []
-            if search.strip():
-                like_parts = [f"CAST({quote_identifier(c.name, 'sqlite')} AS TEXT) LIKE ?" for c in tbl.columns]
+            if search.strip() and col_names_for_search:
+                like_parts = [
+                    f"CAST({quote_identifier(cname, 'sqlite')} AS TEXT) LIKE ?"
+                    for cname in col_names_for_search
+                ]
                 where_clause = " WHERE " + " OR ".join(like_parts)
-                params = [f"%{search.strip()}%"] * len(tbl.columns)
+                params = [f"%{search.strip()}%"] * len(col_names_for_search)
 
             cur.execute(f"SELECT COUNT(*) FROM {tbl_q}{where_clause}", params)
             total_rows = int(cur.fetchone()[0])
@@ -909,12 +1152,33 @@ class DatabaseEngine:
                 f"SELECT * FROM {tbl_q}{where_clause} LIMIT ? OFFSET ?",
                 params + [page_size, offset],
             )
-            rows = [dict(r) for r in cur.fetchall()]
+            fetched = cur.fetchall()
+            rows = [dict(r) for r in fetched]
+            if vw and not col_names_for_search and cur.description:
+                col_names_for_search = [d[0] for d in cur.description]
+
+        col_payload = (
+            [c.model_dump() for c in tbl.columns]
+            if tbl
+            else [
+                {
+                    "name": cname,
+                    "data_type": "VIEW",
+                    "nullable": True,
+                    "is_pk": False,
+                    "is_fk": False,
+                    "is_unique": False,
+                }
+                for cname in col_names_for_search
+            ]
+        )
 
         return {
             "db_name": db_name,
-            "table_name": table_name,
-            "columns": [c.model_dump() for c in tbl.columns],
+            "table_name": target_name,
+            "is_view": vw is not None,
+            "view_select_sql": vw.select_sql if vw else None,
+            "columns": col_payload,
             "rows": rows,
             "total_rows": total_rows,
             "page": page,
@@ -928,6 +1192,10 @@ class DatabaseEngine:
         contract = self.load_or_introspect_schema(db_name)
         tbl = next((t for t in contract.tables if t.name == table_name), None)
         if not tbl:
+            if any(v.name == table_name for v in (contract.views or [])):
+                raise ValueError(
+                    f"La vista '{table_name}' es una consulta virtual de solo lectura; modifica los datos en sus tablas base."
+                )
             raise ValueError(f"La tabla '{table_name}' no existe en '{db_name}'.")
         col_map = {c.name: c for c in tbl.columns}
         for col_name in required_cols:
@@ -1163,27 +1431,43 @@ class DatabaseEngine:
         table_name: str,
         fmt: Literal["csv", "json", "sql"] = "csv",
     ) -> Dict[str, Any]:
-        """Exporta todos los registros de una tabla en formato CSV, JSON o script SQL de sentencias INSERT."""
-        tbl, _ = self._resolve_valid_table_and_cols(db_name, table_name, [])
+        """Exporta todos los registros de una tabla o vista en formato CSV, JSON o script SQL."""
+        contract = self.load_or_introspect_schema(db_name)
+        tbl = next((t for t in contract.tables if t.name == table_name), None)
+        vw = None if tbl else next((v for v in (contract.views or []) if v.name == table_name), None)
+        if not tbl and not vw:
+            raise ValueError(f"La tabla o vista '{table_name}' no existe en '{db_name}'.")
+
+        target_name = tbl.name if tbl else vw.name  # type: ignore[union-attr]
         db_file = self._db_path(db_name)
-        tbl_q = quote_identifier(tbl.name, "sqlite")
+        tbl_q = quote_identifier(target_name, "sqlite")
         with self._connect(db_file) as conn:
             conn.row_factory = sqlite3.Row
             cur = conn.cursor()
             cur.execute(f"SELECT * FROM {tbl_q}")
-            rows = [dict(r) for r in cur.fetchall()]
+            fetched = cur.fetchall()
+            rows = [dict(r) for r in fetched]
+            col_names = [c.name for c in tbl.columns] if tbl else [d[0] for d in (cur.description or [])]
 
-        col_names = [c.name for c in tbl.columns]
         if fmt == "json":
             content = json.dumps(rows, ensure_ascii=False, indent=2)
             return {
-                "filename": f"{db_name}_{tbl.name}.json",
+                "filename": f"{db_name}_{target_name}.json",
                 "mime_type": "application/json;charset=utf-8",
                 "content": content,
                 "row_count": len(rows),
             }
 
         if fmt == "sql":
+            if vw:
+                ddl_vw = self.transpiler._build_create_view(vw, "sqlite", use_idempotent=False)
+                return {
+                    "filename": f"{db_name}_{vw.name}_view.sql",
+                    "mime_type": "text/sql;charset=utf-8",
+                    "content": ddl_vw + "\n",
+                    "row_count": len(rows),
+                }
+            assert tbl is not None
             insertable_cols = [c.name for c in tbl.columns if not c.computed_expression]
             cols_sql = ", ".join(quote_identifier(c, "sqlite", always=False) for c in insertable_cols)
             tbl_ddl_q = quote_identifier(tbl.name, "sqlite", always=False)
@@ -1213,10 +1497,110 @@ class DatabaseEngine:
         for row in rows:
             writer.writerow(row)
         return {
-            "filename": f"{db_name}_{tbl.name}.csv",
+            "filename": f"{db_name}_{target_name}.csv",
             "mime_type": "text/csv;charset=utf-8",
             "content": buf.getvalue(),
             "row_count": len(rows),
+        }
+
+    def export_full_database_sql(
+        self,
+        contract: MasterSchemaContract,
+        dialect: Literal["sqlite", "mysql", "postgresql", "sqlserver"] = "sqlite",
+        include_data: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Exporta la base de datos completa en un único script .sql listo para ejecutar:
+        1. DDL completo adaptado al dialecto destino en orden topológico (padres antes que hijas).
+        2. Sentencias INSERT INTO en el mismo orden topológico omitiendo columnas calculadas,
+           adaptando literales booleanos y IDENTITY_INSERT en SQL Server cuando hay datos en .db.
+        """
+        ddl_bundle = self.transpiler.transpile_ddl(contract, dialect)
+        sections: List[str] = [ddl_bundle["full_sql"]]
+        total_rows = 0
+
+        db_file = self._db_path(contract.db_name)
+        if include_data and db_file.exists():
+            table_map = {t.name: t for t in contract.tables}
+            data_blocks: List[str] = []
+
+            with self._connect(db_file) as conn:
+                conn.row_factory = sqlite3.Row
+                cur = conn.cursor()
+
+                for t_name in ddl_bundle["table_order"]:
+                    tbl = table_map.get(t_name)
+                    if not tbl:
+                        continue
+                    try:
+                        cur.execute(f"SELECT * FROM {quote_identifier(t_name, 'sqlite')}")
+                        rows = [dict(r) for r in cur.fetchall()]
+                    except sqlite3.Error:
+                        continue
+
+                    if not rows:
+                        continue
+
+                    insertable_cols = [c for c in tbl.columns if not c.computed_expression]
+                    if not insertable_cols:
+                        continue
+
+                    tbl_q = quote_identifier(tbl.name, dialect, always=False)
+                    cols_sql = ", ".join(
+                        quote_identifier(c.name, dialect, always=False) for c in insertable_cols
+                    )
+                    has_identity = dialect == "sqlserver" and any(
+                        c.is_pk and c.auto_increment and len(tbl.primary_key) <= 1 for c in insertable_cols
+                    )
+
+                    lines: List[str] = [f"-- Datos de '{tbl.name}' ({len(rows)} registros)"]
+                    if has_identity:
+                        lines.append(f"SET IDENTITY_INSERT {tbl_q} ON;")
+
+                    for row in rows:
+                        vals_sql: List[str] = []
+                        for col in insertable_cols:
+                            v = row.get(col.name)
+                            if v is None:
+                                vals_sql.append("NULL")
+                            elif col.data_type.upper() == "BOOLEAN":
+                                truthy = str(v).strip().upper() in ("1", "TRUE", "T", "S", "YES")
+                                if dialect == "postgresql":
+                                    vals_sql.append("TRUE" if truthy else "FALSE")
+                                else:
+                                    vals_sql.append("1" if truthy else "0")
+                            elif isinstance(v, (int, float)) and not isinstance(v, bool):
+                                vals_sql.append(str(v))
+                            else:
+                                escaped = str(v).replace("'", "''")
+                                vals_sql.append(f"'{escaped}'")
+                        lines.append(f"INSERT INTO {tbl_q} ({cols_sql}) VALUES ({', '.join(vals_sql)});")
+
+                    if has_identity:
+                        lines.append(f"SET IDENTITY_INSERT {tbl_q} OFF;\nGO")
+                    elif dialect == "sqlserver":
+                        lines.append("GO")
+
+                    total_rows += len(rows)
+                    data_blocks.append("\n".join(lines))
+
+            if data_blocks:
+                sections.append(
+                    "-- ============================================================================\n"
+                    f"-- VOLCADO DE DATOS EN ORDEN TOPOLÓGICO ({total_rows} registros totales)\n"
+                    "-- ============================================================================\n\n"
+                    + "\n\n".join(data_blocks)
+                )
+
+        content = "\n\n".join(sections) + "\n"
+        clean_db = to_snake_case(contract.db_name) or "esquema"
+        suffix = "completo" if (include_data and total_rows > 0) else "ddl"
+        return {
+            "filename": f"{clean_db}_{dialect}_{suffix}.sql",
+            "mime_type": "text/sql;charset=utf-8",
+            "content": content,
+            "table_count": len(contract.tables),
+            "row_count": total_rows,
         }
 
     def execute_query(
@@ -1494,11 +1878,47 @@ class DatabaseEngine:
         }
 
         if schema_updated:
-            # Re-introspeccionar el archivo .db para sincronizar el Contrato Maestro JSON y el Lienzo ER
+            # Re-introspeccionar el archivo .db preservando metadatos visuales previos si existían
             db_file = self._db_path(current_db)
-            fresh_contract = self._introspect_sqlite_file(current_db, db_file)
-            self.auditor.audit_schema(fresh_contract)
             meta_file = self._meta_path(current_db)
+            prev_contract: Optional[MasterSchemaContract] = None
+            if meta_file.exists():
+                try:
+                    prev_contract = MasterSchemaContract.model_validate(
+                        json.loads(meta_file.read_text(encoding="utf-8"))
+                    )
+                except Exception:
+                    prev_contract = None
+
+            fresh_contract = self._introspect_sqlite_file(current_db, db_file)
+            if prev_contract:
+                fresh_contract.title = prev_contract.title
+                fresh_contract.ddl_identifier = prev_contract.ddl_identifier
+                fresh_contract.ddl_style = prev_contract.ddl_style
+                fresh_contract.collation = prev_contract.collation
+                fresh_contract.source_prompt = prev_contract.source_prompt
+                fresh_contract.diagram_layout = dict(prev_contract.diagram_layout or {})
+                prev_tbls = {t.name.lower(): t for t in prev_contract.tables}
+                for tbl in fresh_contract.tables:
+                    old_t = prev_tbls.get(tbl.name.lower())
+                    if old_t:
+                        tbl.position_x = old_t.position_x
+                        tbl.position_y = old_t.position_y
+                        tbl.is_associative = old_t.is_associative
+                        tbl.is_historical = old_t.is_historical
+                        tbl.functional_dependencies = list(old_t.functional_dependencies or [])
+                        if old_t.description and "introspeccionada" not in old_t.description:
+                            tbl.description = old_t.description
+                prev_vws = {v.name.lower(): v for v in (prev_contract.views or [])}
+                for vw in fresh_contract.views:
+                    old_v = prev_vws.get(vw.name.lower())
+                    if old_v:
+                        vw.position_x = old_v.position_x
+                        vw.position_y = old_v.position_y
+                        if old_v.description and "Vista virtual en" not in old_v.description:
+                            vw.description = old_v.description
+
+            self.auditor.audit_schema(fresh_contract)
             meta_file.write_text(
                 json.dumps(fresh_contract.model_dump(), ensure_ascii=False, indent=2),
                 encoding="utf-8",

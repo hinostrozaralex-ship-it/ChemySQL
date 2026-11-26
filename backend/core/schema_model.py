@@ -63,6 +63,10 @@ class TableModel(BaseModel):
         default_factory=list,
         description="Nombres de columnas que cuentan con un índice explícito idx_<table>_<col>",
     )
+    functional_dependencies: List[str] = Field(
+        default_factory=list,
+        description="Dependencias funcionales (A, B -> C) y multivaluadas (A ->> B) declaradas para análisis formal 2FN/3FN/BCNF/4FN",
+    )
     tutor_explanation: str = Field(
         default="",
         description="Explicación didáctica del rol de esta tabla en el modelo relacional",
@@ -88,6 +92,19 @@ class RelationModel(BaseModel):
     )
 
 
+class ViewModel(BaseModel):
+    name: str = Field(..., description="Nombre técnico de la vista en snake_case o identificador SQL")
+    select_sql: str = Field(..., description="Consulta SELECT que define la vista (sin CREATE VIEW ... AS)")
+    columns: List[str] = Field(default_factory=list, description="Columnas proyectadas por la vista")
+    description: str = Field(default="", description="Propósito funcional de la vista virtual")
+    position_x: float = Field(default=120.0, description="Coordenada X en el Lienzo ER")
+    position_y: float = Field(default=420.0, description="Coordenada Y en el Lienzo ER")
+    tutor_explanation: str = Field(
+        default="Tabla virtual de solo lectura calculada dinámicamente a partir de una consulta SELECT.",
+        description="Explicación pedagógica de la vista",
+    )
+
+
 class AuditAlertModel(BaseModel):
     id: str
     severity: Literal["critical", "warning", "suggestion", "info"] = "warning"
@@ -96,6 +113,9 @@ class AuditAlertModel(BaseModel):
         "normalizacion_1fn",
         "normalizacion_2fn",
         "normalizacion_3fn",
+        "normalizacion_bcnf",
+        "normalizacion_4fn",
+        "desnormalizacion",
         "tipos_datos",
         "cascada_peligrosa",
         "rendimiento_indices",
@@ -119,6 +139,14 @@ class AuditAlertModel(BaseModel):
 
 class MasterSchemaContract(BaseModel):
     db_name: str = Field(default="proyecto_chemysql", description="Nombre técnico del archivo .db (sin extensión)")
+    ddl_identifier: Optional[str] = Field(
+        default=None,
+        description="Identificador SQL exacto de la BD para scripts DDL (ej. Polideportivo)",
+    )
+    ddl_style: Literal["standard", "idempotent"] = Field(
+        default="standard",
+        description="Estilo de generación DDL: 'standard' (limpio sin IF NOT EXISTS) o 'idempotent' (con IF NOT EXISTS)",
+    )
     title: str = Field(default="Nuevo Proyecto Relacional", description="Título legible del proyecto")
     description: str = Field(default="", description="Resumen funcional del proyecto")
     source_prompt: str = Field(default="", description="Descripción en lenguaje natural original")
@@ -131,9 +159,14 @@ class MasterSchemaContract(BaseModel):
     version: int = Field(default=1, description="Versión incremental del esquema")
     updated_at: str = Field(default_factory=lambda: datetime.now().isoformat(timespec="seconds"))
     tables: List[TableModel] = Field(default_factory=list)
+    views: List[ViewModel] = Field(default_factory=list)
     relations: List[RelationModel] = Field(default_factory=list)
     audit_alerts: List[AuditAlertModel] = Field(default_factory=list)
     tutor_metadata: Dict[str, Any] = Field(default_factory=dict)
+    diagram_layout: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Maquetación persistida del Diagrama Relacional (posiciones Chen/Tablas y verbos personalizados)",
+    )
 
 
 class NLPInferenceRequest(BaseModel):
@@ -151,6 +184,7 @@ class DeploySchemaRequest(BaseModel):
     schema_contract: MasterSchemaContract
     populate_mock_data: bool = False
     mock_rows_per_table: int = 12
+    confirmed_destructive_migration: bool = False
 
 
 class MockDataRequest(BaseModel):
@@ -207,6 +241,25 @@ class SaveDBAsRequest(BaseModel):
 class ParseDDLRequest(BaseModel):
     sql: str
     schema_contract: Optional[MasterSchemaContract] = None
+
+
+class ExportFullSQLRequest(BaseModel):
+    schema_contract: MasterSchemaContract
+    dialect: Literal["sqlite", "mysql", "postgresql", "sqlserver"] = "sqlite"
+    include_data: bool = True
+
+
+class ExportProjectRequest(BaseModel):
+    schema_contract: MasterSchemaContract
+    include_data: bool = True
+
+
+class ImportProjectRequest(BaseModel):
+    bundle_content: Optional[str] = None
+
+
+class SaveLayoutRequest(BaseModel):
+    schema_contract: MasterSchemaContract
 
 
 class QueryDecomposeRequest(BaseModel):

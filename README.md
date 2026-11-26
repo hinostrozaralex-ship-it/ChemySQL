@@ -27,17 +27,18 @@ Combina el rigor de un motor SQL real (SQLite local) con un **auditor relacional
 ## Características principales
 
 * **Motor Determinista Texto → Esquema (Español / English, barra desplegable):** transforma descripciones en español o inglés (texto libre o especificaciones técnicas estructuradas `Tabla` / `Table`) en un *Contrato Maestro JSON* con entidades, tipos semánticos (`DECIMAL(10,2)`, `DATE`, `BOOLEAN`, `VARCHAR UNIQUE`), claves primarias simples/compuestas, columnas calculadas y relaciones `1:1`, `1:N` y `N:M`.
-* **Lienzo ER Interactivo + Undo/Redo (`Ctrl+Z` / `Ctrl+Y`):** arrastre de nodos, edición inline, vinculación visual de claves foráneas y confirmación *Human-in-the-Loop* antes de materializar en disco.
-* **Diagrama Relacional Académico:** notación **Conceptual (Chen)** (entidades, rombos editables, atributos PK/UK/derivados) y **Paso a Tablas (Claves)** con exportación vectorial **SVG** y **PNG** en alta resolución.
-* **Inspector Profesional + Pre-Análisis SQL en Vivo:** edición completa de Proyecto (`COLLATE`), Tablas (`Ver Datos`, `Copiar CREATE TABLE`), Columnas (`DEFAULT`, `CHECK`, `GENERATED ALWAYS AS`, PK compuestas, `INDEX`) y Relaciones, además de detección de errores de sintaxis en tiempo real con salto directo a la línea exacta.
+* **Lienzo ER Interactivo + Vistas + Undo/Redo (`Ctrl+Z` / `Ctrl+Y`):** arrastre de nodos con persistencia automática de maquetación, edición inline, creación de **Vistas Virtuales (`CREATE VIEW`)**, vinculación visual de claves foráneas y confirmación *Human-in-the-Loop* antes de materializar en disco.
+* **Diagrama Relacional Académico:** notación **Conceptual (Chen)** (entidades simples y débiles con discriminadores, rombos editables binarios/reflexivos/N-arios $\ge 3$ FKs, óvalos con distribución anti-colisión angular y opción `Mostrar FK Débil`) y **Paso a Tablas (Claves)** (`pk`, `nn`, `uk`, `fk`, `fx`, modo extendido `Mostrar Tipos / FK`), con cabecera de esquema y exportación vectorial **SVG** y **PNG** en alta resolución.
+* **Proyecto Portable (`.chemysql`) y Migraciones Protegidas:** exportación e importación de paquetes **`.chemysql`** (esquema, maquetación completa, historial y `.db` embebido) separados de copias físicas `.db` y scripts `.sql`; **Escudo Pre-Migración** con copias automáticas `.db.bak` en `workspaces/backups/` antes de reconstruir o eliminar tablas/columnas con datos.
+* **Inspector Profesional + Pre-Análisis SQL + Normalización Matemática (2FN–4FN):** edición de Proyecto (`COLLATE`), Tablas, Vistas, Columnas (`DEFAULT`, `CHECK`, `GENERATED ALWAYS AS`, PK compuestas, `INDEX`) y Relaciones; editor de **Dependencias Funcionales (`A -> B`) y Multivaluadas (`A ->> B`)** con cálculo de **Claves Candidatas**, evaluación **2FN/3FN/BCNF/4FN** y **Calculadora de Cierre de Atributos ($X^+$)**; pre-análisis en vivo con detección de trampas **`NULL`** (`= NULL`, `NOT IN`) y salto directo a la línea exacta.
 * **Auditor Empresarial Avanzado (Score `0–100` + Escudo Anti-Desastres):**
   * Calcula el **Índice de Salud del Esquema** (`0–100`, grado `A+` a `D`) con filtros por categoría, botón **"Corregir Todo"** en 1 clic y **exportación de informe técnico en Markdown (`.md`)**.
-  * Detecta PK faltantes, **1FN, 2FN y 3FN**, tipos semánticos (`FLOAT` en dinero, `TEXT` en fechas), seguridad (**contraseñas cortas**, PII sin `UNIQUE`), reglas `CHECK (>= 0)`, **ciclos FK**, tablas aisladas, palabras reservadas SQL y `ON DELETE CASCADE` peligroso.
-  * Analiza **anti-patrones en consultas SQL** (`JOIN` sin `ON`, `LIKE '%texto%'`, filtros no SARGables y `SELECT *` con `JOIN`) e intercepta `UPDATE`/`DELETE` sin `WHERE` (incluyendo CTE `WITH`) y `DROP TABLE`.
-* **Ejecución SQL Atómica (`ROLLBACK`) y Migraciones Reales:** si una sentencia falla en un script multi-sentencia, SQLite revierte automáticamente todo el bloque para no dejar tablas a medias; soporta además **ejecutar solo el texto seleccionado** y evolución de esquemas con preservación de datos (`RENAME → CREATE → INSERT SELECT → DROP`).
-* **Explorador de Datos Relacional:** cuadrícula paginada editable con soporte de **PK compuestas**, previsualización flotante de registros padre en celdas `FK`, estilos `NULL` y exportación a **CSV, JSON y SQL (`INSERT`)**.
-* **Editor SQL Dual Multi-Dialecto:** sincronización bidireccional **DDL ↔ Lienzo ER** con transpilación a **SQLite, MySQL, PostgreSQL y SQL Server**, **autocompletado inline de línea completa (*Ghost Text* con `Tab`/`→`)**, **resaltado visual de línea con error (`● N`)**, scroll con línea activa centrada, panel de resultados redimensionable, consultas DML paginadas y análisis `EXPLAIN QUERY PLAN` con creación de índices en 1 clic.
-* **Modo Tutor vs. Modo Estándar:** tarjetas pedagógicas vivas sobre tu propio esquema, desglosador paso a paso del orden lógico de ejecución SQL, visualizador de conjuntos `INNER` / `LEFT` / `RIGHT` / `FULL` / `CROSS JOIN` y retos guiados.
+  * Detecta PK faltantes, **1FN, 2FN, 3FN, BCNF y 4FN**, criterio de **desnormalización controlada** en tablas históricas, tipos semánticos (`FLOAT` en dinero, `TEXT` en fechas), seguridad (**contraseñas cortas**, PII sin `UNIQUE`), reglas `CHECK (>= 0)`, **ciclos FK**, tablas aisladas, palabras reservadas SQL y `ON DELETE CASCADE` peligroso.
+  * Analiza **anti-patrones en consultas SQL** (`JOIN` sin `ON`, `LIKE '%texto%'`, filtros no SARGables, `= NULL` / `NOT IN` y `SELECT *` con `JOIN`) e intercepta `UPDATE`/`DELETE` sin `WHERE` (incluyendo CTE `WITH`) y `DROP TABLE`.
+* **Ejecución SQL Atómica (`ROLLBACK`) y Exportación Topológica:** si una sentencia falla en un script multi-sentencia, SQLite revierte todo el bloque para no dejar tablas a medias; soporta **ejecutar solo el texto seleccionado**, evolución con preservación de datos (`RENAME → CREATE → INSERT SELECT → DROP`) y exportación **`Exportar BD + Datos (.sql)`** (`DDL + INSERT` en orden topológico).
+* **Explorador de Datos Relacional:** cuadrícula paginada editable para tablas y de solo lectura para vistas, con soporte de **PK compuestas**, previsualización flotante de registros padre en celdas `FK`, estilos `NULL` y exportación a **CSV, JSON y SQL (`INSERT` / `CREATE VIEW`)**.
+* **Editor SQL Dual Multi-Dialecto:** sincronización bidireccional **DDL ↔ Lienzo ER** con selector **`IF NOT EXISTS: OFF / ON`** y lectura de `CREATE DATABASE` / `COLLATE`; transpilación fiel a **SQLite, MySQL, PostgreSQL y SQL Server** (incluyendo prevención de múltiples rutas de cascada T-SQL), **autocompletado inline (*Ghost Text* con `Tab`/`→`)**, resaltado de línea con error (`● N`), consultas DML paginadas y análisis `EXPLAIN QUERY PLAN` con creación de índices en 1 clic.
+* **Modo Tutor vs. Modo Estándar:** tarjetas pedagógicas vivas sobre tu esquema, **equivalencia automática en Álgebra Relacional ($\pi, \sigma, \bowtie, \times, \gamma, \tau, \cup, \cap, -$)**, desglosador paso a paso del orden lógico SQL, Constructor Guiado con `GROUP BY` / `HAVING`, visualizador de conjuntos `INNER` / `LEFT` / `RIGHT` / `FULL` / `CROSS JOIN` y retos guiados.
 * **Interfaz Dual y Bilingüe (`ES · EN`):** **Tema Oscuro (Grafito)** y **Tema Claro (Laboratorio)**, selector de idioma nativo en el instalador de Windows y conmutador en vivo `ES · EN` en la barra de estado.
 
 ---
@@ -65,15 +66,15 @@ ChemySQL/
 
 ## Descargar e instalar (Windows)
 
-Descarga el instalador oficial de Windows desde **GitHub Releases** (no requiere Python instalado):
+Descarga el instalador oficial de Windows desde **GitHub Releases** o directamente desde [`installer_output/Setup-ChemySQL-1.7.0.exe`](installer_output/Setup-ChemySQL-1.7.0.exe) (no requiere Python instalado):
 
 <p>
-  <a href="https://github.com/hinostrozaralex-ship-it/ChemySQL/releases/download/v1.6.0/Setup-ChemySQL-1.6.0.exe">
-    <img src="https://img.shields.io/badge/Descargar%20ChemySQL%20v1.6.0-Windows%20(.exe)-10b981?style=for-the-badge&logo=windows&logoColor=white" alt="Descargar ChemySQL para Windows" />
+  <a href="https://github.com/hinostrozaralex-ship-it/ChemySQL/releases/download/v1.7.0/Setup-ChemySQL-1.7.0.exe">
+    <img src="https://img.shields.io/badge/Descargar%20ChemySQL%20v1.7.0-Windows%20(.exe)-10b981?style=for-the-badge&logo=windows&logoColor=white" alt="Descargar ChemySQL para Windows" />
   </a>
 </p>
 
-1. Haz clic en el botón superior para descargar **`Setup-ChemySQL-1.6.0.exe`** (o visita la página de [Releases](https://github.com/hinostrozaralex-ship-it/ChemySQL/releases/latest)).
+1. Haz clic en el botón superior para descargar **`Setup-ChemySQL-1.7.0.exe`** (o visita la página de [Releases](https://github.com/hinostrozaralex-ship-it/ChemySQL/releases/latest)).
 2. Ejecuta el instalador, elige tu idioma (**Español / English**) y sigue el asistente.
 3. Abre **ChemySQL** desde el menú Inicio o el acceso directo del escritorio.
 
@@ -115,7 +116,7 @@ python -m unittest discover -s tests -v
 # 1. Generar ejecutable nativo en dist/ChemySQL/ChemySQL.exe
 python -m PyInstaller --noconfirm --clean ChemySQL.spec
 
-# 2. (Opcional) Generar instalador único bilingüe Setup-ChemySQL-1.5.0.exe con Inno Setup 6
+# 2. (Opcional) Generar instalador único bilingüe Setup-ChemySQL-1.7.0.exe con Inno Setup 6
 iscc installer\ChemySQL.iss
 ```
 

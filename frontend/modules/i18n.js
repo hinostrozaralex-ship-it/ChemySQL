@@ -27,9 +27,11 @@ export const TRANSLATIONS = {
         tabVersions: "Versiones",
         connectedFolder: "Carpeta Conectada",
         openInPc: "Ver en PC",
+        openProject: "Abrir .chemysql",
+        saveProject: "Guardar .chemysql",
         changeFolder: "Cambiar Carpeta",
-        openDb: "Abrir .db",
-        saveDbAs: "Guardar .db como...",
+        openDb: "Importar .db",
+        saveDbAs: "Exportar .db",
         projectsInFolder: "Proyectos en Carpeta",
         btnNewShort: "+ Nuevo",
         // Pestañas Centrales
@@ -39,6 +41,7 @@ export const TRANSLATIONS = {
         viewSql: "Editor SQL Dual",
         // Lienzo ER
         btnAddTable: "Nueva Tabla",
+        btnAddView: "Nueva Vista",
         btnAddRelation: "Vincular Tablas (FK)",
         btnAutoLayout: "Reorganizar Plano",
         btnCenter: "Centrar",
@@ -47,6 +50,10 @@ export const TRANSLATIONS = {
         relTables: "Paso a Tablas (Claves)",
         relHideAttrs: "Ocultar Atributos",
         relShowAttrs: "Mostrar Atributos",
+        relShowWeakFk: "Mostrar FK Débil",
+        relHideWeakFk: "Ocultar FK Débil",
+        relShowPhysical: "Mostrar Tipos / FK",
+        relHidePhysical: "Ocultar Tipos / FK",
         relReset: "Reorganizar",
         relExportSvg: "Exportar SVG",
         relExportPng: "Exportar PNG",
@@ -59,7 +66,8 @@ export const TRANSLATIONS = {
         sqlSubDdl: "Estructura (DDL Completo)",
         sqlSubDml: "Consultas (DML / SELECT)",
         btnCopyDdl: "Copiar Script",
-        btnDownloadDdl: "Guardar / Descargar .sql",
+        btnDownloadDdl: "Guardar DDL .sql",
+        btnExportFullSql: "Exportar BD + Datos (.sql)",
         btnApplyDdl: "Aplicar Cambios al Esquema",
         btnNewSql: "Nuevo .sql",
         btnOpenSql: "Abrir .sql",
@@ -107,9 +115,11 @@ export const TRANSLATIONS = {
         tabVersions: "Versions",
         connectedFolder: "Connected Folder",
         openInPc: "Open Folder",
+        openProject: "Open .chemysql",
+        saveProject: "Save .chemysql",
         changeFolder: "Change Folder",
-        openDb: "Open .db",
-        saveDbAs: "Save .db as...",
+        openDb: "Import .db",
+        saveDbAs: "Export .db",
         projectsInFolder: "Projects in Folder",
         btnNewShort: "+ New",
         // Center Views
@@ -119,6 +129,7 @@ export const TRANSLATIONS = {
         viewSql: "Dual SQL Editor",
         // ER Canvas
         btnAddTable: "New Table",
+        btnAddView: "New View",
         btnAddRelation: "Link Tables (FK)",
         btnAutoLayout: "Auto Layout",
         btnCenter: "Center",
@@ -127,6 +138,10 @@ export const TRANSLATIONS = {
         relTables: "Table Mapping (Keys)",
         relHideAttrs: "Hide Attributes",
         relShowAttrs: "Show Attributes",
+        relShowWeakFk: "Show Weak FK",
+        relHideWeakFk: "Hide Weak FK",
+        relShowPhysical: "Show Types / FK",
+        relHidePhysical: "Hide Types / FK",
         relReset: "Reorganize",
         relExportSvg: "Export SVG",
         relExportPng: "Export PNG",
@@ -139,7 +154,8 @@ export const TRANSLATIONS = {
         sqlSubDdl: "Structure (Full DDL)",
         sqlSubDml: "Queries (DML / SELECT)",
         btnCopyDdl: "Copy Script",
-        btnDownloadDdl: "Save / Download .sql",
+        btnDownloadDdl: "Save DDL .sql",
+        btnExportFullSql: "Export DB + Data (.sql)",
         btnApplyDdl: "Apply Changes to Schema",
         btnNewSql: "New .sql",
         btnOpenSql: "Open .sql",
@@ -212,6 +228,8 @@ export function applyLanguageToDOM(lang = "es") {
     const folderLbl = document.querySelector(".workspace-folder-label");
     if (folderLbl) folderLbl.textContent = t("connectedFolder", l);
     setSpanText("#btn-open-workspace-explorer", t("openInPc", l));
+    setSpanText("#btn-open-project", t("openProject", l));
+    setSpanText("#btn-save-project", t("saveProject", l));
     setSpanText("#btn-change-workspace", t("changeFolder", l));
     setSpanText("#btn-import-db", t("openDb", l));
     setSpanText("#btn-save-db-as", t("saveDbAs", l));
@@ -225,6 +243,7 @@ export function applyLanguageToDOM(lang = "es") {
     setSpanText('[data-center-view="sql"]', t("viewSql", l));
 
     setSpanText("#btn-canvas-add-table", t("btnAddTable", l));
+    setSpanText("#btn-canvas-add-view", t("btnAddView", l));
     setSpanText("#btn-canvas-add-relation", t("btnAddRelation", l));
     setSpanText("#btn-canvas-autolayout", t("btnAutoLayout", l));
     setSpanText("#btn-zoom-reset", t("btnCenter", l));
@@ -246,6 +265,7 @@ export function applyLanguageToDOM(lang = "es") {
     setSpanText('[data-sql-subtab="dml"]', t("sqlSubDml", l));
     setSpanText("#btn-copy-ddl", t("btnCopyDdl", l));
     setSpanText("#btn-download-ddl", t("btnDownloadDdl", l));
+    setSpanText("#btn-export-full-sql", t("btnExportFullSql", l));
     setSpanText("#btn-apply-ddl-edits", t("btnApplyDdl", l));
     setSpanText("#btn-new-sql-file", t("btnNewSql", l));
     setSpanText("#btn-open-sql-file", t("btnOpenSql", l));

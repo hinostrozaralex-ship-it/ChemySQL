@@ -2,6 +2,28 @@
 
 Todos los cambios relevantes de **ChemySQL** se documentan en este archivo.
 
+## [1.7.0] - 2026-11-26
+
+### Añadido y mejorado
+* **Fidelidad DDL Multi-Dialecto y Exportación SQL Completa:**
+  * Selector **`IF NOT EXISTS: OFF / ON`** en el Editor DDL para alternar entre scripts estándar limpios (`CREATE DATABASE ...; CREATE TABLE ...;`) y scripts idempotentes.
+  * `parse_ddl_to_contract` ahora lee `CREATE DATABASE`, `USE` y `COLLATE` respetando identificadores exactos (ej. `Polideportivo`) y preserva descripciones, cardinalidades (`1:1`, `N:M`), `is_associative`, `is_historical` y dependencias funcionales al sincronizar código DDL ↔ Lienzo ER (con soporte completo de `Ctrl+Z` / `Ctrl+Y`).
+  * Prevención automática de rutas convergentes/cíclicas de cascada en SQL Server (error T-SQL 1785), tipos `NVARCHAR(MAX)`/`DOUBLE PRECISION` y botón **`Exportar BD + Datos (.sql)`** en orden topológico (`DDL + INSERT` con `SET IDENTITY_INSERT` cuando procede).
+* **Proyecto Portable (`.chemysql`), Persistencia de Maquetación y Escudo Pre-Migración:**
+  * Nuevo formato portable **`.chemysql`** (`Abrir .chemysql` / `Guardar .chemysql`) que empaqueta Contrato Maestro, coordenadas ER/Chen/Tablas, verbos personalizados, historial de migraciones y la base `.db` embebida.
+  * Guardado automático de la maquetación visual de todos los diagramas en `.schema.json`.
+  * Respaldo automático pre-migración en `workspaces/backups/*.db.bak` y diálogo preventivo con recuento de filas afectadas antes de desplegar migraciones que eliminen tablas o columnas con datos.
+* **Diagrama Relacional Académico Pulido (ASIR):**
+  * Título del proyecto dentro del lienzo y de los archivos **SVG / PNG** exportados.
+  * Algoritmo anti-colisión angular en **Conceptual (Chen)** para que los atributos no se superpongan con conectores verticales, soporte de relaciones **N-arias / ternarias ($\ge 3$ FKs)** y conmutador **`Mostrar FK Débil`** con discriminadores subrayados discontinuos.
+  * Leyenda **`fx` (Calculada)** y conmutador **`Mostrar Tipos / FK`** en **Paso a Tablas** para visualizar tipos físicos y políticas `ON DELETE` sobre los arcos.
+* **Vistas (`CREATE VIEW`), Lógica `NULL`, Álgebra Relacional y `GROUP BY` Guiado:**
+  * Soporte completo de vistas virtuales en modelo Pydantic, SQLite, transpilador multi-dialecto, Lienzo ER, Inspector, autocompletado SQL y Explorador de Datos (solo lectura).
+  * Detección en vivo de trampas con `NULL` (`= NULL`, `!= NULL`, `<> NULL` y `NOT IN (SELECT ...)` sin `IS NOT NULL`) tanto al escribir como al ejecutar.
+  * Traductor determinista a **Álgebra Relacional** ($\pi, \sigma, \bowtie, \times, \gamma, \tau, \cup, \cap, -$) en Modo Tutor y Constructor Guiado ampliado con `IS NULL`, `GROUP BY`, agregaciones y `HAVING`.
+* **Motor Matemático de Normalización Formal (2FN–4FN) y Desnormalización Controlada:**
+  * Editor de Dependencias Funcionales (`A -> B`) y Multivaluadas (`A ->> B`) en el Inspector de Tabla con cálculo de **Claves Candidatas minimales**, evaluación automática de **2FN, 3FN, FNBC (Boyce-Codd) y 4FN**, orientaciones de **desnormalización controlada** en tablas históricas y **Calculadora en vivo de Cierre de Atributos ($X^+$)**.
+
 ## [1.6.0] - 2026-11-26
 
 ### Añadido y mejorado

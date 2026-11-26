@@ -25,6 +25,8 @@ workspaces/*.sqlite3
 workspaces/*.schema.json
 workspaces/*.history.json
 workspaces/*.sql
+workspaces/*.chemysql
+workspaces/backups/
 
 # Herramientas locales y sistema
 .impeccable/

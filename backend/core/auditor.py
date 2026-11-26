@@ -11,8 +11,9 @@ Evalúa el Contrato Maestro JSON y las sentencias SQL para detectar:
 
 from __future__ import annotations
 from datetime import datetime
+from itertools import combinations
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, FrozenSet, List, Optional, Set, Tuple
 
 from backend.core.nlp_parser import HISTORICAL_KEYWORDS, build_column, to_plural, to_singular, to_snake_case
 from backend.core.schema_model import (
@@ -490,17 +491,376 @@ class ProactiveAuditor:
         # 5. Reglas Avanzadas: 2FN, 3FN, Seguridad (Password/PII), CHECK de dominio, Grafo y Palabras Reservadas
         self._audit_advanced_rules(contract, table_map, alerts)
 
+        # 7. Motor Matemático Formal de Dependencias Funcionales (X+, Claves Candidatas, 2FN/3FN/BCNF/4FN) y Desnormalización
+        norm_by_table = self._audit_formal_normalization_and_denorm(contract, alerts)
+
         contract.audit_alerts = alerts
         contract.tutor_metadata = dict(contract.tutor_metadata or {})
         contract.tutor_metadata["audit_summary"] = self.compute_health_score(alerts)
+        contract.tutor_metadata["normalization_by_table"] = norm_by_table
         return alerts
+
+    @staticmethod
+    def parse_dependency_strings(
+        raw_rules: List[str], valid_cols: Set[str]
+    ) -> Tuple[List[Tuple[FrozenSet[str], str]], List[Tuple[FrozenSet[str], FrozenSet[str]]]]:
+        """
+        Parsea cadenas de Dependencias Funcionales ('A, B -> C, D' o 'A → C')
+        y Dependencias Multivaluadas ('A ->> B, C' o 'A ↠ B') validando columnas reales (case-insensitive).
+        """
+        col_canon = {c.lower(): c for c in valid_cols}
+        fds: List[Tuple[FrozenSet[str], str]] = []
+        mvds: List[Tuple[FrozenSet[str], FrozenSet[str]]] = []
+
+        for raw in raw_rules or []:
+            line = (raw or "").strip()
+            if not line:
+                continue
+            is_mvd = "->>" in line or "↠" in line
+            if is_mvd:
+                parts = re.split(r"->>|↠", line, maxsplit=1)
+            elif "->" in line or "→" in line:
+                parts = re.split(r"->|→", line, maxsplit=1)
+            else:
+                continue
+
+            if len(parts) != 2:
+                continue
+
+            lhs_tokens = [
+                col_canon[t.strip().lower()]
+                for t in parts[0].split(",")
+                if t.strip().lower() in col_canon
+            ]
+            rhs_tokens = [
+                col_canon[t.strip().lower()]
+                for t in parts[1].split(",")
+                if t.strip().lower() in col_canon
+            ]
+            if not lhs_tokens or not rhs_tokens:
+                continue
+
+            lhs_set = frozenset(lhs_tokens)
+            if is_mvd:
+                mvds.append((lhs_set, frozenset(rhs_tokens)))
+            else:
+                for r_attr in rhs_tokens:
+                    if r_attr not in lhs_set:
+                        fds.append((lhs_set, r_attr))
+
+        return fds, mvds
+
+    @staticmethod
+    def compute_attribute_closure(
+        seed_attrs: Set[str] | FrozenSet[str],
+        fds: List[Tuple[FrozenSet[str], str]],
+    ) -> Set[str]:
+        """Algoritmo clásico de cierre de atributos X+ bajo un conjunto de dependencias funcionales F."""
+        closure: Set[str] = set(seed_attrs)
+        changed = True
+        while changed:
+            changed = False
+            for lhs, rhs in fds:
+                if rhs not in closure and lhs.issubset(closure):
+                    closure.add(rhs)
+                    changed = True
+        return closure
+
+    @classmethod
+    def compute_candidate_keys(
+        cls,
+        all_attrs: List[str],
+        fds: List[Tuple[FrozenSet[str], str]],
+        fallback_pk: List[str],
+    ) -> List[List[str]]:
+        """Encuentra todas las claves candidatas minimales de una relación R(U, F)."""
+        universe = set(all_attrs)
+        if not universe:
+            return []
+        if not fds:
+            return [list(fallback_pk)] if fallback_pk else [list(all_attrs)]
+
+        rhs_all = {rhs for _, rhs in fds}
+        lhs_all: Set[str] = set()
+        for lhs, _ in fds:
+            lhs_all |= set(lhs)
+
+        # Atributos esenciales: nunca aparecen en el lado derecho de una DF no trivial
+        essential = [a for a in all_attrs if a not in rhs_all]
+        if cls.compute_attribute_closure(essential, fds) == universe:
+            return [essential]
+
+        # Atributos candidatos adicionales que aparecen en algún lado izquierdo
+        middle = [a for a in all_attrs if a not in essential and a in lhs_all]
+        if len(middle) > 12:
+            middle = middle[:12]
+
+        found_keys: List[FrozenSet[str]] = []
+        max_k = min(len(middle), 5)
+        for k in range(1, max_k + 1):
+            for combo in combinations(middle, k):
+                cand = frozenset(essential) | frozenset(combo)
+                if any(prev.issubset(cand) for prev in found_keys):
+                    continue
+                if cls.compute_attribute_closure(cand, fds) == universe:
+                    found_keys.append(cand)
+
+        if not found_keys:
+            return [list(fallback_pk)] if fallback_pk else [list(all_attrs)]
+
+        col_order = {c: i for i, c in enumerate(all_attrs)}
+        return [sorted(list(k), key=lambda x: col_order.get(x, 999)) for k in found_keys]
+
+    def _audit_formal_normalization_and_denorm(
+        self,
+        contract: MasterSchemaContract,
+        alerts: List[AuditAlertModel],
+    ) -> Dict[str, Any]:
+        """
+        Evalúa matemáticamente 2FN, 3FN, BCNF y 4FN a partir de las Dependencias Funcionales
+        y Multivaluadas declaradas + restricciones estructurales PK/UQ, y añade orientación sobre
+        desnormalización controlada en tablas históricas/contables.
+        """
+        summary_by_tbl: Dict[str, Any] = {}
+        has_1fn_by_tbl = {
+            a.affected_table for a in alerts if a.category == "normalizacion_1fn" and a.affected_table
+        }
+
+        for tbl in contract.tables:
+            col_names = [c.name for c in tbl.columns]
+            col_set = set(col_names)
+            pk_cols = tbl.primary_key if tbl.primary_key else [c.name for c in tbl.columns if c.is_pk]
+
+            # 1. Construir FDs explícitas + FDs estructurales (PK -> U y UNIQUE NOT NULL -> U cuando no hay FDs que redefinan claves)
+            explicit_fds, explicit_mvds = self.parse_dependency_strings(
+                tbl.functional_dependencies or [], col_set
+            )
+            all_fds: List[Tuple[FrozenSet[str], str]] = list(explicit_fds)
+
+            # Si hay PK declarada, la PK es superclave del diseño físico actual; pero si el usuario
+            # declaró FDs explícitas para descubrir si su PK está bien elegida o si viola 2FN/3FN/BCNF,
+            # añadimos PK -> U solo si ninguna FD explícita contradice la minimalidad parcial, o mejor:
+            # añadimos PK -> A para los atributos que no queden sueltos salvo cuando probamos dependencias parciales!
+            # En teoría relacional, si PK=(A,B) y existe A -> C, añadir (A,B) -> U mantiene a (A,B) como superclave:
+            # si ningún atributo determina B salvo B mismo, (A,B) sigue siendo clave candidata y A -> C se detecta como dependencia parcial 2FN!
+            if pk_cols and all(p in col_set for p in pk_cols):
+                pk_fset = frozenset(pk_cols)
+                for cn in col_names:
+                    if cn not in pk_fset and (pk_fset, cn) not in all_fds:
+                        all_fds.append((pk_fset, cn))
+
+            for uc in tbl.columns:
+                if uc.is_unique and not uc.nullable and not uc.is_pk:
+                    u_fset = frozenset([uc.name])
+                    for cn in col_names:
+                        if cn != uc.name and (u_fset, cn) not in all_fds:
+                            all_fds.append((u_fset, cn))
+
+            cand_keys = self.compute_candidate_keys(col_names, all_fds, pk_cols)
+            cand_key_sets = [frozenset(k) for k in cand_keys]
+            prime_attrs = {a for k in cand_keys for a in k}
+            universe = set(col_names)
+
+            violates_2fn = False
+            violates_3fn = False
+            violates_bcnf = False
+            violates_4fn = False
+
+            # Evaluar cada FD explícita del usuario frente a 2FN, 3FN y BCNF
+            for lhs, rhs in explicit_fds:
+                lhs_closure = self.compute_attribute_closure(lhs, all_fds)
+                is_superkey = lhs_closure == universe
+                if is_superkey:
+                    continue
+
+                lhs_str = ", ".join(sorted(lhs))
+                is_proper_subset_of_ck = any(lhs < ck for ck in cand_key_sets if len(ck) > 1)
+                rhs_is_prime = rhs in prime_attrs
+
+                if is_proper_subset_of_ck and not rhs_is_prime:
+                    violates_2fn = True
+                    alerts.append(
+                        AuditAlertModel(
+                            id=f"audit_formal_2fn_{tbl.name}_{'_'.join(sorted(lhs))}_{rhs}",
+                            severity="warning",
+                            category="normalizacion_2fn",
+                            title=f"Violación formal de 2ª Forma Normal (2FN) en '{tbl.name}': {{{lhs_str}}} → {rhs}",
+                            technical_message=(
+                                f"El atributo no primo '{rhs}' depende parcialmente de {{{lhs_str}}}, que es solo una parte "
+                                f"de una clave candidata compuesta ({', '.join( '/' .join(k) for k in cand_keys )}). "
+                                f"Extrae ({{{lhs_str}}}, {rhs}) a su propia tabla maestra."
+                            ),
+                            affected_table=tbl.name,
+                            affected_column=rhs,
+                            tutor_lesson={
+                                "concept": "2ª Forma Normal (2FN): Eliminación de Dependencias Parciales",
+                                "why_it_matters": (
+                                    f"Al depender '{rhs}' únicamente de {{{lhs_str}}} y no de toda la clave compuesta, "
+                                    f"su valor se repite innecesariamente en cada fila donde reaparece {{{lhs_str}}}, provocando anomalías de modificación."
+                                ),
+                                "before_example": f"{tbl.name}({', '.join(pk_cols)}, ..., {rhs}) con {lhs_str} → {rhs}",
+                                "after_example": f"Extraer tabla ({lhs_str} [PK], {rhs}) y dejar {lhs_str} como FK en '{tbl.name}'",
+                                "analogy": "Escribir el nombre y precio por hora de la pista en cada reserva del año en lugar de guardarlo una sola vez en la ficha de la pista.",
+                            },
+                        )
+                    )
+                elif not rhs_is_prime:
+                    violates_3fn = True
+                    alerts.append(
+                        AuditAlertModel(
+                            id=f"audit_formal_3fn_{tbl.name}_{'_'.join(sorted(lhs))}_{rhs}",
+                            severity="warning",
+                            category="normalizacion_3fn",
+                            title=f"Violación formal de 3ª Forma Normal (3FN) en '{tbl.name}': {{{lhs_str}}} → {rhs}",
+                            technical_message=(
+                                f"Dependencia transitiva detectada: {{{lhs_str}}} no es superclave de '{tbl.name}', pero determina "
+                                f"al atributo no primo '{rhs}'. Descompón creando una tabla para ({{{lhs_str}}}, {rhs})."
+                            ),
+                            affected_table=tbl.name,
+                            affected_column=rhs,
+                            tutor_lesson={
+                                "concept": "3ª Forma Normal (3FN): Todo depende de la clave, toda la clave y nada más que la clave",
+                                "why_it_matters": (
+                                    f"Si borras el último registro de '{tbl.name}' con cierto valor de {{{lhs_str}}}, perderías también "
+                                    f"qué '{rhs}' le correspondía (anomalía de borrado)."
+                                ),
+                                "before_example": f"Clave → {lhs_str} → {rhs} en la misma tabla '{tbl.name}'",
+                                "after_example": f"Tabla auxiliar ({lhs_str} [PK], {rhs}) referenciada desde '{tbl.name}'",
+                                "analogy": "Guardar ciudad y provincia en cada socio en vez de asociarlas al código postal.",
+                            },
+                        )
+                    )
+                else:
+                    violates_bcnf = True
+                    alerts.append(
+                        AuditAlertModel(
+                            id=f"audit_formal_bcnf_{tbl.name}_{'_'.join(sorted(lhs))}_{rhs}",
+                            severity="info",
+                            category="normalizacion_bcnf",
+                            title=f"Tabla '{tbl.name}' cumple 3FN pero viola FNBC (Boyce-Codd): {{{lhs_str}}} → {rhs}",
+                            technical_message=(
+                                f"El determinante {{{lhs_str}}} no es superclave aunque '{rhs}' sea un atributo primo "
+                                f"(parte de una clave candidata). Para alcanzar BCNF estricta, {{{lhs_str}}} debería ser clave en una relación separada."
+                            ),
+                            affected_table=tbl.name,
+                            affected_column=rhs,
+                        )
+                    )
+
+            # Evaluar 4FN (Dependencias Multivaluadas explícitas A ->> B o patrón estructural de hechos independientes)
+            for m_lhs, m_rhs in explicit_mvds:
+                is_trivial_mvd = m_rhs.issubset(m_lhs) or (set(m_lhs) | set(m_rhs)) == universe
+                if is_trivial_mvd:
+                    continue
+                if self.compute_attribute_closure(m_lhs, all_fds) != universe:
+                    violates_4fn = True
+                    lhs_s = ", ".join(sorted(m_lhs))
+                    rhs_s = ", ".join(sorted(m_rhs))
+                    alerts.append(
+                        AuditAlertModel(
+                            id=f"audit_formal_4fn_{tbl.name}_{'_'.join(sorted(m_lhs))}_{'_'.join(sorted(m_rhs))}",
+                            severity="warning",
+                            category="normalizacion_4fn",
+                            title=f"Violación de 4ª Forma Normal (4FN) en '{tbl.name}': {{{lhs_s}}} ↠ {{{rhs_s}}}",
+                            technical_message=(
+                                f"Existe una dependencia multivaluada no trivial {{{lhs_s}}} ↠ {{{rhs_s}}} donde {{{lhs_s}}} no es superclave. "
+                                f"Mezclar hechos multivaluados independientes obliga a repetir el producto cartesiano de valores; divide en dos tablas: ({lhs_s}, {rhs_s}) y ({lhs_s}, resto)."
+                            ),
+                            affected_table=tbl.name,
+                        )
+                    )
+
+            # Heurística estructural de 4FN: tabla todo-clave de >= 3 columnas sin atributos propios descriptivos y sin ser asociativa N-aria marcada
+            non_pk_cols = [c for c in tbl.columns if c.name not in set(pk_cols)]
+            if len(pk_cols) >= 3 and len(non_pk_cols) == 0 and not tbl.is_associative and not explicit_mvds:
+                alerts.append(
+                    AuditAlertModel(
+                        id=f"audit_struct_4fn_check_{tbl.name}",
+                        severity="info",
+                        category="normalizacion_4fn",
+                        title=f"Revisión de 4ª Forma Normal (4FN) en clave triple '{tbl.name}' ({', '.join(pk_cols)})",
+                        technical_message=(
+                            f"La tabla '{tbl.name}' está compuesta únicamente por una clave de {len(pk_cols)} atributos ({', '.join(pk_cols)}). "
+                            "Si dos de esos atributos son independientes entre sí respecto al primero (ej. empleado ↠ idioma y empleado ↠ titulación), "
+                            "sepáralos en dos tablas binarias para cumplir 4FN."
+                        ),
+                        affected_table=tbl.name,
+                    )
+                )
+
+            # Criterio de Desnormalización Controlada en tablas históricas/contables
+            is_hist = tbl.is_historical or any(h in tbl.name.lower() for h in HISTORICAL_KEYWORDS)
+            fk_count = sum(1 for c in tbl.columns if c.is_fk)
+            if is_hist and fk_count >= 1:
+                cached_totals = [
+                    c.name
+                    for c in tbl.columns
+                    if c.name.lower() in ("total", "subtotal", "importe_total", "precio_historico", "precio_unitario")
+                    and not c.computed_expression
+                ]
+                if cached_totals:
+                    cols_lbl = ", ".join(cached_totals)
+                    alerts.append(
+                        AuditAlertModel(
+                            id=f"audit_denorm_hist_ok_{tbl.name}",
+                            severity="info",
+                            category="desnormalizacion",
+                            title=f"Desnormalización controlada detectada en tabla histórica '{tbl.name}' ({cols_lbl})",
+                            technical_message=(
+                                f"Almacenar físicamente ({cols_lbl}) en '{tbl.name}' introduce redundancia calculable, pero en tablas contables/históricas "
+                                "es una buena práctica deliberada: congela el importe legal del momento de la operación aunque cambien las tarifas futuras y acelera informes agregados sin recalcular JOINs."
+                            ),
+                            affected_table=tbl.name,
+                            tutor_lesson={
+                                "concept": "Cuándo Desnormalizar de Forma Controlada vs Normalizar",
+                                "why_it_matters": (
+                                    "En tablas maestras vivas (clientes, productos, pistas), la redundancia causa anomalías graves. "
+                                    "En cambio, en documentos cerrados (facturas, líneas de pedido) o lecturas masivas analíticas, "
+                                    "guardar el valor congelado o usar columnas GENERATED STORED / Vistas equilibra integridad y rendimiento."
+                                ),
+                                "before_example": "Recalcular el total de facturas de hace 3 años cruzando con el precio actual del catálogo (¡daría importes distintos a los cobrados!)",
+                                "after_example": f"Guardar {cols_lbl} congelado en '{tbl.name}' y auditarlo con CHECK (>= 0) o triggers",
+                                "analogy": "El ticket impreso de una compra conserva el precio al que pagaste ese día, aunque el supermercado suba el precio la semana siguiente.",
+                            },
+                        )
+                    )
+
+            # Determinar Forma Normal alcanzada por esta tabla
+            if tbl.name in has_1fn_by_tbl:
+                highest_nf = "Sin 1FN"
+            elif violates_2fn or any(
+                a.category == "normalizacion_2fn" and a.affected_table == tbl.name for a in alerts
+            ):
+                highest_nf = "1FN"
+            elif violates_3fn or any(
+                a.category == "normalizacion_3fn" and a.affected_table == tbl.name for a in alerts
+            ):
+                highest_nf = "2FN"
+            elif violates_bcnf:
+                highest_nf = "3FN"
+            elif violates_4fn:
+                highest_nf = "BCNF"
+            else:
+                highest_nf = "4FN / BCNF"
+
+            summary_by_tbl[tbl.name] = {
+                "highest_nf": highest_nf,
+                "candidate_keys": cand_keys,
+                "prime_attributes": sorted(list(prime_attrs)),
+                "declared_fds": list(tbl.functional_dependencies or []),
+            }
+
+        return summary_by_tbl
 
     def compute_health_score(self, alerts: List[AuditAlertModel]) -> Dict[str, Any]:
         """Calcula el Índice de Salud del Esquema (0-100) y Grado (A+ a D) de forma determinista."""
         critical = sum(1 for a in alerts if a.severity == "critical")
         warnings = sum(1 for a in alerts if a.severity == "warning")
         infos = sum(1 for a in alerts if a.severity == "info")
-        score = max(0, min(100, 100 - critical * 18 - warnings * 7 - infos * 2))
+        penalized_infos = sum(
+            1 for a in alerts if a.severity == "info" and a.category != "desnormalizacion"
+        )
+        score = max(0, min(100, 100 - critical * 18 - warnings * 7 - penalized_infos * 2))
         if score >= 95:
             grade = "A+"
         elif score >= 85:
@@ -1191,6 +1551,37 @@ class ProactiveAuditor:
                     "message": (
                         "Buena práctica: evita `SELECT *` en consultas con JOIN; selecciona solo las columnas necesarias "
                         "para reducir transferencia y evitar colisiones de nombres."
+                    ),
+                }
+            )
+
+        if re.search(r"\b(?:WHERE|HAVING|ON|AND|OR)\b[^;]*?(?:!=\s*NULL|<>+\s*NULL|(?<![!<>])=\s*NULL)\b", cleaned_sql, flags=re.IGNORECASE):
+            recommendations.append(
+                {
+                    "table": None,
+                    "column": None,
+                    "index_name": None,
+                    "ddl": None,
+                    "severity": "warning",
+                    "message": (
+                        "Lógica trivaluada SQL (NULL): comparar con `= NULL` o `!= NULL` evalúa a UNKNOWN y devuelve 0 filas. "
+                        "Usa siempre `IS NULL` o `IS NOT NULL`."
+                    ),
+                }
+            )
+
+        m_not_in = re.search(r"\bNOT\s+IN\s*\(\s*SELECT\b([^)]+)\)", cleaned_sql, flags=re.IGNORECASE)
+        if m_not_in and "IS NOT NULL" not in m_not_in.group(1).upper():
+            recommendations.append(
+                {
+                    "table": None,
+                    "column": None,
+                    "index_name": None,
+                    "ddl": None,
+                    "severity": "warning",
+                    "message": (
+                        "Trampa de NULL en `NOT IN (SELECT ...)`: si la subconsulta proyecta algún valor NULL, toda la condición "
+                        "`NOT IN` devolverá conjunto vacío. Añade `WHERE col IS NOT NULL` en la subconsulta o usa `NOT EXISTS`."
                     ),
                 }
             )

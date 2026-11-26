@@ -202,8 +202,15 @@ class TestDatabaseEngineAndMigrations(unittest.TestCase):
                 c.data_type = "DECIMAL(10,2)"
         tbl.columns.append(ColumnModel(name="activo", data_type="BOOLEAN", nullable=False, default_value="1"))
 
-        res = self.engine.deploy_schema(c2, populate_mock_data=False)
+        # Sin confirmar migración destructiva, el Escudo Pre-Migración bloquea preventivamente
+        warn_res = self.engine.deploy_schema(c2, populate_mock_data=False, confirmed_destructive=False)
+        self.assertTrue(warn_res.get("requires_migration_confirmation"))
+        self.assertEqual(warn_res["migration_warning"]["affected_rows"], 2)
+
+        # Al confirmar, crea backup automático .db.bak y reconstruye preservando datos
+        res = self.engine.deploy_schema(c2, populate_mock_data=False, confirmed_destructive=True)
         self.assertEqual(res["version"], 2)
+        self.assertTrue(res.get("backup_path") and Path(res["backup_path"]).exists())
         self.assertTrue(any("reconstruida" in ch.lower() for ch in res["migration"]["changes"]))
 
         rows = self.engine.get_table_rows("mig_test", "clientes")["rows"]
@@ -248,6 +255,55 @@ class TestDatabaseEngineAndMigrations(unittest.TestCase):
         self.assertIn("EDITADO", csv_exp["content"])
         self.assertEqual(len(json.loads(json_exp["content"])), 4)
         self.assertIn('INSERT INTO "order"', sql_exp["content"])
+
+    def test_portable_chemysql_bundle_and_layout_persistence(self) -> None:
+        ddl = """
+        CREATE DATABASE Academia;
+        CREATE TABLE alumno (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nombre VARCHAR(80) NOT NULL
+        );
+        """
+        c = self.tr.parse_ddl_to_contract(ddl)
+        self.engine.deploy_schema(c, populate_mock_data=False)
+        self.engine.insert_row("academia", "alumno", {"nombre": "Lucía"})
+
+        # Guardar maquetación visual personalizada (ER + Chen + Verbos)
+        loaded = self.engine.load_or_introspect_schema("academia")
+        loaded.tables[0].position_x = 412.0
+        loaded.tables[0].position_y = 288.0
+        loaded.diagram_layout = {
+            "positions": {"chen": {"ent:alumno": {"x": 500, "y": 300}}, "tables": {}},
+            "customVerbs": {"rel_demo": "Matricula"},
+        }
+        save_res = self.engine.save_schema_layout(loaded)
+        self.assertTrue(save_res["saved"])
+        self.assertTrue(save_res["is_deployed"])
+
+        # Exportar a paquete portable .chemysql con datos SQLite embebidos
+        reloaded = self.engine.load_or_introspect_schema("academia")
+        bundle = self.engine.export_project_bundle(reloaded, include_data=True)
+        self.assertEqual(bundle["filename"], "academia.chemysql")
+        self.assertTrue(bundle["has_embedded_db"])
+
+        # Importar el paquete .chemysql en otro ordenador / carpeta vacía
+        with tempfile.TemporaryDirectory() as other_pc_dir:
+            other_engine = DatabaseEngine(Path(other_pc_dir))
+            imp = other_engine.import_project_bundle(bundle["content"])
+            self.assertTrue(imp["imported"])
+            self.assertTrue(imp["restored_sqlite_db"])
+            self.assertEqual(imp["db_name"], "academia")
+            restored_contract = imp["schema_contract"]
+            self.assertEqual(restored_contract["ddl_identifier"], "Academia")
+            self.assertEqual(restored_contract["tables"][0]["position_x"], 412.0)
+            self.assertEqual(
+                restored_contract["diagram_layout"]["customVerbs"]["rel_demo"],
+                "Matricula",
+            )
+            self.assertGreaterEqual(len(imp["history"]), 1)
+            rows = other_engine.get_table_rows("academia", "alumno")["rows"]
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["nombre"], "Lucía")
 
 
 class TestAPISecurity(unittest.TestCase):
@@ -347,6 +403,234 @@ class TestAPISecurity(unittest.TestCase):
         self.assertIn("producto cartesiano", msgs)
         self.assertIn("LIKE '%texto%'", msgs)
         self.assertIn("SARGable", msgs)
+
+    def test_ddl_create_database_clean_style_mssql_cascade_and_full_export(self) -> None:
+        tr = SQLTranspiler()
+        clean_mysql_script = """
+        CREATE DATABASE Polideportivo CHARACTER SET utf8mb4 COLLATE utf8mb4_spanish_ci;
+        USE Polideportivo;
+
+        CREATE TABLE INSTALACION (
+            cod_instalacion CHAR(3) NOT NULL PRIMARY KEY,
+            nombre VARCHAR(40) NOT NULL UNIQUE
+        );
+
+        CREATE TABLE PISTA (
+            cod_pista SMALLINT NOT NULL PRIMARY KEY,
+            largo DECIMAL(4,1) NOT NULL,
+            ancho DECIMAL(4,1) NOT NULL,
+            superficie DECIMAL(7,2) GENERATED ALWAYS AS (largo * ancho) VIRTUAL,
+            cod_instalacion CHAR(3) NOT NULL,
+            CONSTRAINT FK_PISTA_INST FOREIGN KEY (cod_instalacion) REFERENCES INSTALACION(cod_instalacion) ON DELETE CASCADE ON UPDATE CASCADE
+        );
+
+        CREATE TABLE MANTENIMIENTO (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            cod_instalacion CHAR(3) NOT NULL,
+            cod_pista SMALLINT NOT NULL,
+            activo BOOLEAN NOT NULL DEFAULT 1,
+            CONSTRAINT FK_MANT_INST FOREIGN KEY (cod_instalacion) REFERENCES INSTALACION(cod_instalacion) ON DELETE CASCADE ON UPDATE CASCADE,
+            CONSTRAINT FK_MANT_PISTA FOREIGN KEY (cod_pista) REFERENCES PISTA(cod_pista) ON DELETE CASCADE ON UPDATE CASCADE
+        );
+        """
+        contract = tr.parse_ddl_to_contract(clean_mysql_script)
+        self.assertEqual(contract.db_name, "polideportivo")
+        self.assertEqual(contract.ddl_identifier, "Polideportivo")
+        self.assertEqual(contract.title, "Polideportivo")
+        self.assertEqual(contract.ddl_style, "standard")
+        self.assertEqual(contract.collation, "utf8mb4_spanish_ci")
+
+        # En modo standard NO debe inyectar IF NOT EXISTS y debe respetar 'Polideportivo'
+        mysql_out = tr.transpile_ddl(contract, "mysql")["full_sql"]
+        self.assertIn("CREATE DATABASE Polideportivo CHARACTER SET utf8mb4 COLLATE utf8mb4_spanish_ci;", mysql_out)
+        self.assertIn("USE Polideportivo;", mysql_out)
+        self.assertNotIn("IF NOT EXISTS", mysql_out)
+
+        # En modo idempotent SÍ debe incluir IF NOT EXISTS
+        contract.ddl_style = "idempotent"
+        mysql_idem = tr.transpile_ddl(contract, "mysql")["full_sql"]
+        self.assertIn("CREATE DATABASE IF NOT EXISTS Polideportivo", mysql_idem)
+        self.assertIn("CREATE TABLE IF NOT EXISTS INSTALACION", mysql_idem)
+        contract.ddl_style = "standard"
+
+        # En SQL Server debe degradar la segunda ruta convergente de cascada en MANTENIMIENTO a NO ACTION
+        mssql_out = tr.transpile_ddl(contract, "sqlserver")["full_sql"]
+        self.assertIn("CREATE DATABASE Polideportivo", mssql_out)
+        self.assertIn("múltiples rutas de cascada", mssql_out)
+
+        # Despliegue y exportación completa (DDL + INSERT en orden topológico sin columna calculada 'superficie')
+        with tempfile.TemporaryDirectory() as tmp:
+            eng = DatabaseEngine(Path(tmp))
+            eng.deploy_schema(contract, populate_mock_data=False)
+            eng.insert_row("polideportivo", "INSTALACION", {"cod_instalacion": "I01", "nombre": "Pabellón Norte"})
+            eng.insert_row(
+                "polideportivo",
+                "PISTA",
+                {"cod_pista": 1, "largo": 20.0, "ancho": 10.0, "cod_instalacion": "I01"},
+            )
+            eng.insert_row(
+                "polideportivo",
+                "MANTENIMIENTO",
+                {"cod_instalacion": "I01", "cod_pista": 1, "activo": 1},
+            )
+
+            pg_full = eng.export_full_database_sql(contract, dialect="postgresql", include_data=True)
+            self.assertEqual(pg_full["row_count"], 3)
+            sql_txt = pg_full["content"]
+            # Orden topológico en INSERT: INSTALACION antes que PISTA, y PISTA antes que MANTENIMIENTO
+            pos_inst = sql_txt.index("INSERT INTO INSTALACION")
+            pos_pista = sql_txt.index("INSERT INTO PISTA")
+            pos_mant = sql_txt.index("INSERT INTO MANTENIMIENTO")
+            self.assertLess(pos_inst, pos_pista)
+            self.assertLess(pos_pista, pos_mant)
+            # No se debe incluir la columna calculada 'superficie' en el INSERT de PISTA
+            pista_insert_line = next(
+                ln for ln in sql_txt.splitlines() if ln.startswith("INSERT INTO PISTA")
+            )
+            self.assertNotIn("superficie", pista_insert_line)
+            # Booleano formateado como TRUE en PostgreSQL
+            self.assertIn("TRUE", sql_txt)
+
+            # En SQL Server incluye SET IDENTITY_INSERT para tablas con PK IDENTITY
+            ms_full = eng.export_full_database_sql(contract, dialect="sqlserver", include_data=True)
+            self.assertIn("SET IDENTITY_INSERT MANTENIMIENTO ON;", ms_full["content"])
+            self.assertIn("SET IDENTITY_INSERT MANTENIMIENTO OFF;", ms_full["content"])
+
+    def test_views_null_traps_and_relational_algebra(self) -> None:
+        tr = SQLTranspiler()
+        aud = ProactiveAuditor()
+        tutor = TutorEngine()
+
+        ddl_with_view = """
+        CREATE DATABASE Biblioteca;
+        CREATE TABLE socios (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nombre VARCHAR(100) NOT NULL,
+            telefono VARCHAR(20)
+        );
+        CREATE VIEW vista_socios_con_tel AS
+        SELECT id, nombre, telefono FROM socios WHERE telefono IS NOT NULL;
+        """
+        contract = tr.parse_ddl_to_contract(ddl_with_view)
+        self.assertEqual(len(contract.views), 1)
+        self.assertEqual(contract.views[0].name, "vista_socios_con_tel")
+        self.assertIn("nombre", contract.views[0].columns)
+
+        # Transpilación multi-dialecto de vistas
+        contract.ddl_style = "idempotent"
+        self.assertIn("CREATE OR REPLACE VIEW", tr.transpile_ddl(contract, "postgresql")["full_sql"])
+        self.assertIn("CREATE OR ALTER VIEW", tr.transpile_ddl(contract, "sqlserver")["full_sql"])
+
+        # Despliegue y lectura de solo lectura desde Explorador
+        with tempfile.TemporaryDirectory() as tmp:
+            eng = DatabaseEngine(Path(tmp))
+            eng.deploy_schema(contract, populate_mock_data=False)
+            eng.insert_row("biblioteca", "socios", {"nombre": "Carlos", "telefono": "600111222"})
+            eng.insert_row("biblioteca", "socios", {"nombre": "Elena", "telefono": None})
+
+            v_rows = eng.get_table_rows("biblioteca", "vista_socios_con_tel")
+            self.assertTrue(v_rows["is_view"])
+            self.assertEqual(v_rows["total_rows"], 1)
+            self.assertEqual(v_rows["rows"][0]["nombre"], "Carlos")
+
+            # Intentar modificar una vista directamente debe rechazarse con mensaje claro
+            with self.assertRaises(ValueError) as ctx:
+                eng.insert_row("biblioteca", "vista_socios_con_tel", {"nombre": "X"})
+            self.assertIn("solo lectura", str(ctx.exception))
+
+        # Trampas de NULL detectadas por el Auditor SQL
+        null_recs = aud.analyze_query_plan(
+            "SELECT * FROM socios WHERE telefono = NULL AND id NOT IN (SELECT socio_id FROM prestamos)",
+            [],
+        )
+        joined_msgs = " ".join(r["message"] for r in null_recs)
+        self.assertIn("IS NULL", joined_msgs)
+        self.assertIn("NOT IN", joined_msgs)
+
+        # Equivalencia en Álgebra Relacional
+        decomp = tutor.decompose_sql_query(
+            "SELECT s.nombre, p.fecha FROM socios s INNER JOIN prestamos p ON s.id = p.socio_id WHERE s.activo = 1 ORDER BY p.fecha DESC;"
+        )
+        alg = decomp.get("relational_algebra")
+        self.assertIsNotNone(alg)
+        self.assertIn("π_", alg["expression"])
+        self.assertIn("σ_", alg["expression"])
+        self.assertIn("⋈_", alg["expression"])
+        self.assertIn("τ_", alg["expression"])
+
+    def test_formal_normalization_2fn_3fn_bcnf_4fn_and_denorm(self) -> None:
+        tr = SQLTranspiler()
+        aud = ProactiveAuditor()
+
+        ddl = """
+        CREATE TABLE reserva_pista (
+            cod_pista CHAR(4) NOT NULL,
+            fecha DATE NOT NULL,
+            nombre_pista VARCHAR(40) NOT NULL,
+            cod_postal CHAR(5) NOT NULL,
+            ciudad VARCHAR(50) NOT NULL,
+            PRIMARY KEY (cod_pista, fecha)
+        );
+
+        CREATE TABLE docencia_bcnf (
+            alumno VARCHAR(30) NOT NULL,
+            asignatura VARCHAR(30) NOT NULL,
+            profesor VARCHAR(30) NOT NULL,
+            PRIMARY KEY (alumno, asignatura)
+        );
+
+        CREATE TABLE empleado_habilidades (
+            empleado_id INT NOT NULL,
+            idioma VARCHAR(30) NOT NULL,
+            titulacion VARCHAR(50) NOT NULL,
+            PRIMARY KEY (empleado_id, idioma, titulacion)
+        );
+
+        CREATE TABLE facturas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            cliente_id INTEGER NOT NULL,
+            subtotal DECIMAL(10,2) NOT NULL CHECK (subtotal >= 0),
+            total DECIMAL(10,2) NOT NULL CHECK (total >= 0),
+            FOREIGN KEY (cliente_id) REFERENCES docencia_bcnf(alumno)
+        );
+        """
+        contract = tr.parse_ddl_to_contract(ddl)
+        t_res = next(t for t in contract.tables if t.name == "reserva_pista")
+        t_bcnf = next(t for t in contract.tables if t.name == "docencia_bcnf")
+        t_4fn = next(t for t in contract.tables if t.name == "empleado_habilidades")
+        t_fac = next(t for t in contract.tables if t.name == "facturas")
+        t_fac.is_historical = True
+
+        # 2FN parcial (cod_pista -> nombre_pista) y 3FN transitiva (cod_postal -> ciudad)
+        t_res.functional_dependencies = [
+            "cod_pista -> nombre_pista",
+            "cod_postal -> ciudad",
+        ]
+        # BCNF clásica: profesor -> asignatura (asignatura es atributo primo de la PK (alumno, asignatura))
+        t_bcnf.functional_dependencies = [
+            "profesor -> asignatura",
+        ]
+        # 4FN explícita: dependencia multivaluada empleado_id ->> idioma
+        t_4fn.functional_dependencies = [
+            "empleado_id ->> idioma",
+        ]
+
+        alerts = aud.audit_schema(contract)
+        cats = {a.category for a in alerts}
+        self.assertIn("normalizacion_2fn", cats)
+        self.assertIn("normalizacion_3fn", cats)
+        self.assertIn("normalizacion_bcnf", cats)
+        self.assertIn("normalizacion_4fn", cats)
+        self.assertIn("desnormalizacion", cats)
+
+        norm_meta = contract.tutor_metadata["normalization_by_table"]
+        self.assertEqual(norm_meta["reserva_pista"]["highest_nf"], "1FN")
+        self.assertEqual(norm_meta["docencia_bcnf"]["highest_nf"], "3FN")
+        # En docencia_bcnf existen dos claves candidatas minimales: (alumno, asignatura) y (alumno, profesor)
+        ck_bcnf = [set(k) for k in norm_meta["docencia_bcnf"]["candidate_keys"]]
+        self.assertIn({"alumno", "asignatura"}, ck_bcnf)
+        self.assertIn({"alumno", "profesor"}, ck_bcnf)
+        self.assertEqual(norm_meta["empleado_habilidades"]["highest_nf"], "BCNF")
 
 
 if __name__ == "__main__":

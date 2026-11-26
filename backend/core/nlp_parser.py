@@ -917,8 +917,8 @@ class SpanishNLPParser:
         )
         return contract
 
-    def _extract_explicit_db_name(self, raw_text: str) -> Optional[str]:
-        """Extrae el nombre explícito de la base de datos en español o inglés ('base de datos llamada X' / 'database called X')."""
+    def _extract_explicit_db_raw(self, raw_text: str) -> Optional[str]:
+        """Extrae el identificador literal declarado para la BD preservando mayúsculas/minúsculas."""
         stop = {
             "para", "con", "de", "del", "que", "en", "donde", "sobre", "la", "el",
             "un", "una", "los", "las", "por", "como", "segun", "mediante", "sin",
@@ -936,10 +936,16 @@ class SpanishNLPParser:
         for pat in patterns:
             m = re.search(pat, raw_text, flags=re.IGNORECASE)
             if m:
-                cand = to_snake_case(m.group(1))
+                raw_ident = m.group(1).strip()
+                cand = to_snake_case(raw_ident)
                 if cand and cand not in stop:
-                    return cand
+                    return raw_ident
         return None
+
+    def _extract_explicit_db_name(self, raw_text: str) -> Optional[str]:
+        """Extrae el nombre explícito de la base de datos en snake_case."""
+        raw_ident = self._extract_explicit_db_raw(raw_text)
+        return to_snake_case(raw_ident) if raw_ident else None
 
     def _infer_project_identity(
         self, raw_text: str, norm_text: str, explicit_db_name: Optional[str]
@@ -1401,14 +1407,23 @@ class SpanishNLPParser:
     ) -> MasterSchemaContract:
         # 1. Detectar nombre de base de datos y cotejamiento (collation)
         # Si el texto declara explícitamente "base de datos llamada <nombre>", tiene prioridad absoluta.
-        inferred_db = self._extract_explicit_db_name(raw_text)
+        inferred_raw = self._extract_explicit_db_raw(raw_text)
+        inferred_db = to_snake_case(inferred_raw) if inferred_raw else None
+        ddl_ident: Optional[str] = None
         if inferred_db:
             final_db_name = inferred_db
+            ddl_ident = inferred_raw
         elif db_name and to_snake_case(db_name) not in ("proyecto_chemysql", "proyecto_sgbd", "nuevo_proyecto"):
             final_db_name = to_snake_case(db_name)
+            if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", db_name.strip()):
+                ddl_ident = db_name.strip()
         else:
             final_db_name = to_snake_case(db_name or "proyecto_estructurado")
-        final_title = f"Base de Datos {final_db_name.replace('_', ' ').title()}"
+        final_title = (
+            ddl_ident
+            if (ddl_ident and "_" not in ddl_ident)
+            else f"Base de Datos {final_db_name.replace('_', ' ').title()}"
+        )
 
         collation = self._extract_collation(raw_text)
 
@@ -1570,6 +1585,7 @@ class SpanishNLPParser:
 
         return MasterSchemaContract(
             db_name=final_db_name,
+            ddl_identifier=ddl_ident,
             title=final_title,
             description=raw_text[:280] + ("..." if len(raw_text) > 280 else ""),
             source_prompt=raw_text,

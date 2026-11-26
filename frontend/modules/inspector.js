@@ -38,6 +38,75 @@ const COLLATIONS = [
 ];
 
 /**
+ * Calcula en vivo (< 0.1 ms) el cierre de atributos X+ sobre una tabla dada una semilla X.
+ */
+export function computeClosureClient(table, seedText) {
+    const cols = (table.columns || []).map((c) => c.name);
+    const colCanon = {};
+    cols.forEach((c) => {
+        colCanon[c.toLowerCase()] = c;
+    });
+
+    const fds = [];
+    (table.functional_dependencies || []).forEach((raw) => {
+        const line = String(raw || "").trim();
+        if (!line || line.includes("->>") || line.includes("↠")) return;
+        const parts = line.split(/->|→/);
+        if (parts.length !== 2) return;
+        const lhs = parts[0]
+            .split(",")
+            .map((s) => colCanon[s.trim().toLowerCase()])
+            .filter(Boolean);
+        const rhs = parts[1]
+            .split(",")
+            .map((s) => colCanon[s.trim().toLowerCase()])
+            .filter(Boolean);
+        if (lhs.length && rhs.length) {
+            rhs.forEach((r) => fds.push({ lhs, rhs: r }));
+        }
+    });
+
+    const pkCols =
+        table.primary_key && table.primary_key.length
+            ? table.primary_key
+            : (table.columns || []).filter((c) => c.is_pk).map((c) => c.name);
+    if (pkCols.length) {
+        cols.forEach((cn) => {
+            if (!pkCols.includes(cn)) fds.push({ lhs: pkCols, rhs: cn });
+        });
+    }
+    (table.columns || []).forEach((uc) => {
+        if (uc.is_unique && !uc.nullable && !uc.is_pk) {
+            cols.forEach((cn) => {
+                if (cn !== uc.name) fds.push({ lhs: [uc.name], rhs: cn });
+            });
+        }
+    });
+
+    const seed = String(seedText || "")
+        .split(",")
+        .map((s) => colCanon[s.trim().toLowerCase()])
+        .filter(Boolean);
+    const closure = new Set(seed);
+    let changed = true;
+    while (changed) {
+        changed = false;
+        for (const rule of fds) {
+            if (!closure.has(rule.rhs) && rule.lhs.every((a) => closure.has(a))) {
+                closure.add(rule.rhs);
+                changed = true;
+            }
+        }
+    }
+    const ordered = cols.filter((c) => closure.has(c));
+    return {
+        seed,
+        closure: ordered,
+        isSuperkey: cols.length > 0 && ordered.length === cols.length,
+    };
+}
+
+/**
  * Analizador estático determinista en vivo del código SQL (< 1 ms).
  * Detecta incidencias antes de pulsar Ejecutar SQL y devuelve su número de línea exacto.
  */
@@ -160,13 +229,73 @@ export function analyzeSQLScriptLive(sqlText, contract, lang = "es") {
         prevCodeLineIdx = li;
     }
 
-    // 4. Detectar tablas declaradas en el script + tablas conocidas en el contrato
-    const knownTables = new Set(
-        ((contract && contract.tables) || []).map((t) => String(t.name || "").toLowerCase())
-    );
+    // 4. Detectar tablas y vistas declaradas en el script + conocidas en el contrato
+    const knownTables = new Set([
+        ...((contract && contract.tables) || []).map((t) => String(t.name || "").toLowerCase()),
+        ...((contract && contract.views) || []).map((v) => String(v.name || "").toLowerCase()),
+    ]);
     const createdInScript = new Set();
     for (const m of text.matchAll(/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[`"'\[]?([A-Za-z_][A-Za-z0-9_]*)[`"'\]]?/gi)) {
         createdInScript.add(m[1].toLowerCase());
+    }
+    for (const mv of text.matchAll(/CREATE\s+(?:OR\s+(?:REPLACE|ALTER)\s+)?VIEW\s+(?:IF\s+NOT\s+EXISTS\s+)?[`"'\[]?([A-Za-z_][A-Za-z0-9_]*)[`"'\]]?/gi)) {
+        createdInScript.add(mv[1].toLowerCase());
+    }
+
+    // 5. Trampas de lógica trivaluada con NULL (= NULL, != NULL, <> NULL, NOT IN con subconsulta)
+    let inSetClause = false;
+    for (let li = 0; li < lines.length; li++) {
+        const cleanNoStr = lines[li].replace(/--.*$/, "").replace(/'(?:''|[^'])*'/g, "''");
+        let inspectPart = cleanNoStr;
+
+        if (/\bSET\b/i.test(inspectPart) && !/\bON\s+(?:DELETE|UPDATE)\s+SET\s+NULL\b/i.test(inspectPart)) {
+            if (/\bWHERE\b/i.test(inspectPart)) {
+                inspectPart = inspectPart.replace(/\bSET\b[\s\S]*?(?=\bWHERE\b)/i, "");
+                inSetClause = false;
+            } else {
+                inspectPart = inspectPart.replace(/\bSET\b[\s\S]*$/i, "");
+                inSetClause = true;
+            }
+        } else if (inSetClause) {
+            if (/\b(WHERE|FROM|HAVING|SELECT|JOIN)\b/i.test(inspectPart)) {
+                inspectPart = inspectPart.replace(/^[\s\S]*?(?=\b(?:WHERE|FROM|HAVING|SELECT|JOIN)\b)/i, "");
+                inSetClause = false;
+            } else {
+                if (inspectPart.includes(";")) inSetClause = false;
+                inspectPart = "";
+            }
+        }
+
+        if (
+            inspectPart &&
+            !/\bDEFAULT\s+NULL\b/i.test(inspectPart) &&
+            !/\bON\s+(?:DELETE|UPDATE)\s+SET\s+NULL\b/i.test(inspectPart) &&
+            /(?:!=\s*NULL|<>\s*NULL|(?<![!<>])=\s*NULL)\b/i.test(inspectPart)
+        ) {
+            issues.push({
+                severity: "warning",
+                line: li + 1,
+                message: isEn
+                    ? "Three-valued logic trap: '= NULL' or '!= NULL' evaluates to UNKNOWN (0 rows). Use 'IS NULL' or 'IS NOT NULL'."
+                    : "Trampa con NULL: '= NULL' o '!= NULL' evalúa a UNKNOWN (0 filas). Usa 'IS NULL' o 'IS NOT NULL'.",
+            });
+        }
+        if (cleanNoStr.includes(";")) {
+            inSetClause = false;
+        }
+    }
+
+    const mNotIn = text.replace(/--.*?$/gm, "").match(/\bNOT\s+IN\s*\(\s*SELECT\b([\s\S]*?)\)/i);
+    if (mNotIn && !/\bIS\s+NOT\s+NULL\b/i.test(mNotIn[1])) {
+        const idx = text.toUpperCase().indexOf("NOT IN");
+        const notInLine = idx >= 0 ? text.slice(0, idx).split("\n").length : 1;
+        issues.push({
+            severity: "warning",
+            line: notInLine,
+            message: isEn
+                ? "NULL trap in 'NOT IN (SELECT ...)': if the subquery returns any NULL, the entire filter returns 0 rows. Add 'IS NOT NULL' or use 'NOT EXISTS'."
+                : "Trampa con NULL en 'NOT IN (SELECT ...)': si la subconsulta devuelve algún NULL, devolverá 0 filas. Añade 'IS NOT NULL' o usa 'NOT EXISTS'.",
+        });
     }
 
     // Comprobar tablas referenciadas en FROM / JOIN / UPDATE / DELETE FROM
@@ -300,6 +429,7 @@ export function renderProfessionalInspector(container, state, callbacks) {
     // 1. INSPECTOR DE PROYECTO / ESQUEMA GLOBAL (cuando no hay selección específica)
     if (!sel) {
         const tables = contract.tables || [];
+        const views = contract.views || [];
         const rels = contract.relations || [];
         const totalIndexes = tables.reduce((acc, t) => acc + ((t.indexes || []).length), 0);
         const alertsCount = (contract.audit_alerts || []).length;
@@ -360,6 +490,26 @@ export function renderProfessionalInspector(container, state, callbacks) {
                           </div>`
                 }
             </div>
+            ${
+                views.length > 0
+                    ? `
+            <div class="inspector-card">
+                <h3 class="sidebar-heading">${isEn ? "Virtual Views (VIEW)" : "Vistas Virtuales (VIEW)"}</h3>
+                <div class="inspector-quick-list">
+                    ${views
+                        .map(
+                            (vw) => `
+                        <button type="button" class="inspector-quick-row" data-insp-pick-view="${escapeHtml(vw.name)}">
+                            <span class="inspector-quick-name">${escapeHtml(vw.name)}</span>
+                            <span class="count-chip">VIEW</span>
+                        </button>
+                    `
+                        )
+                        .join("")}
+                </div>
+            </div>`
+                    : ""
+            }
         `;
 
         document.getElementById("btn-save-proj-props")?.addEventListener("click", () => {
@@ -378,6 +528,81 @@ export function renderProfessionalInspector(container, state, callbacks) {
                 if (tbl) callbacks.onSelectElement({ type: "table", table: tbl.name, data: tbl });
             });
         });
+
+        container.querySelectorAll("[data-insp-pick-view]").forEach((btn) => {
+            btn.addEventListener("click", () => {
+                const vName = btn.getAttribute("data-insp-pick-view");
+                const vw = views.find((v) => v.name === vName);
+                if (vw) callbacks.onSelectElement({ type: "view", view: vw.name, data: vw });
+            });
+        });
+        return;
+    }
+
+    // 1B. INSPECTOR DE VISTA VIRTUAL (CREATE VIEW)
+    if (sel.type === "view") {
+        const vw = (contract.views || []).find((v) => v.name === sel.view);
+        if (!vw) {
+            callbacks.onSelectElement(null);
+            return;
+        }
+        container.innerHTML = `
+            <div class="inspector-card">
+                <div class="audit-card-header">
+                    <h3 class="sidebar-heading">${isEn ? "View:" : "Vista:"} ${escapeHtml(vw.name)}</h3>
+                    <div style="display:flex; gap:4px;">
+                        <button type="button" class="btn-xs" id="btn-insp-view-back">${isEn ? "Project" : "Proyecto"}</button>
+                        <button type="button" class="btn-xs" id="btn-delete-view" style="color:var(--accent-crimson);">${isEn ? "Delete" : "Eliminar"}</button>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <label for="edit-view-name">${isEn ? "View Name" : "Nombre de la Vista"}</label>
+                    <input id="edit-view-name" type="text" class="control-input-sm" value="${escapeHtml(vw.name)}">
+                </div>
+                <div class="form-row">
+                    <label for="edit-view-desc">${isEn ? "Description" : "Descripción funcional"}</label>
+                    <input id="edit-view-desc" type="text" class="control-input-sm" value="${escapeHtml(vw.description || "")}">
+                </div>
+                <div class="form-row">
+                    <label for="edit-view-sql">${isEn ? "Defining SELECT Query" : "Consulta SELECT de la Vista"}</label>
+                    <textarea id="edit-view-sql" class="nlp-textarea" rows="5" style="font-family:var(--font-mono); font-size:12px;">${escapeHtml(vw.select_sql || "")}</textarea>
+                </div>
+                <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                    <button type="button" class="btn btn-primary btn-sm" id="btn-save-view-changes">
+                        ${isEn ? "Save View & Transpile" : "Guardar Vista y Transpilar"}
+                    </button>
+                    <button type="button" class="btn btn-secondary btn-sm" id="btn-open-view-explorer">
+                        ${isEn ? "Query in Explorer" : "Consultar en Explorador"}
+                    </button>
+                </div>
+            </div>
+        `;
+
+        document.getElementById("btn-insp-view-back")?.addEventListener("click", () => callbacks.onSelectElement(null));
+        document.getElementById("btn-open-view-explorer")?.addEventListener("click", () => {
+            if (callbacks.onOpenTableInExplorer) callbacks.onOpenTableInExplorer(vw.name);
+        });
+        document.getElementById("btn-save-view-changes")?.addEventListener("click", () => {
+            const nextName = document.getElementById("edit-view-name").value.trim().replace(/\s+/g, "_");
+            const nextDesc = document.getElementById("edit-view-desc").value.trim();
+            const nextSql = document.getElementById("edit-view-sql").value.trim().replace(/;+\s*$/, "");
+            if (!nextName || !nextSql) {
+                showToast(isEn ? "Provide a view name and SELECT query." : "Indica nombre y consulta SELECT para la vista.");
+                return;
+            }
+            vw.name = nextName;
+            vw.description = nextDesc;
+            vw.select_sql = nextSql;
+            sel.view = nextName;
+            callbacks.onSchemaMutated(contract, true);
+            showToast(isEn ? `View '${nextName}' updated.` : `Vista '${nextName}' actualizada.`);
+        });
+        document.getElementById("btn-delete-view")?.addEventListener("click", () => {
+            contract.views = (contract.views || []).filter((v) => v !== vw);
+            callbacks.onSelectElement(null);
+            callbacks.onSchemaMutated(contract, true);
+            showToast(isEn ? "View removed from schema." : "Vista eliminada del esquema.");
+        });
         return;
     }
 
@@ -393,6 +618,21 @@ export function renderProfessionalInspector(container, state, callbacks) {
             : (tbl.columns || []).filter((c) => c.is_pk).map((c) => c.name);
         const outRels = (contract.relations || []).filter((r) => r.source_table === tbl.name);
         const inRels = (contract.relations || []).filter((r) => r.target_table === tbl.name);
+        const normInfo =
+            (contract.tutor_metadata &&
+                contract.tutor_metadata.normalization_by_table &&
+                contract.tutor_metadata.normalization_by_table[tbl.name]) ||
+            null;
+        const nfLabel = normInfo ? normInfo.highest_nf : "4FN / BCNF";
+        const ckFormatted =
+            normInfo && normInfo.candidate_keys && normInfo.candidate_keys.length
+                ? normInfo.candidate_keys.map((k) => `{${k.join(", ")}}`).join(" · ")
+                : pkCols.length
+                ? `{${pkCols.join(", ")}}`
+                : "—";
+        const fdLines = (tbl.functional_dependencies || []).join("\n");
+        const defaultSeed = pkCols.join(", ") || ((tbl.columns && tbl.columns[0] && tbl.columns[0].name) || "");
+        const initialClosure = computeClosureClient(tbl, defaultSeed);
 
         container.innerHTML = `
             <div class="inspector-card">
@@ -461,11 +701,88 @@ export function renderProfessionalInspector(container, state, callbacks) {
                 </div>
                 <button type="button" class="btn btn-primary btn-sm" id="btn-add-column-submit">${isEn ? "+ Add Column & Audit" : "+ Añadir Columna y Auditar"}</button>
             </div>
+
+            <div class="inspector-card">
+                <div class="audit-card-header">
+                    <h3 class="sidebar-heading">${isEn ? "Formal Normalization (2NF–4NF)" : "Normalización Formal (2FN–4FN)"}</h3>
+                    <span class="count-chip">${escapeHtml(nfLabel)}</span>
+                </div>
+                <p class="sidebar-helper-text">
+                    <strong>${isEn ? "Candidate Keys:" : "Claves Candidatas:"}</strong>
+                    <code>${escapeHtml(ckFormatted)}</code>
+                </p>
+                <div class="form-row">
+                    <label for="insp-fd-textarea">${
+                        isEn
+                            ? "Functional (A -> B) & Multivalued (A ->> B) Dependencies (1 per line)"
+                            : "Dependencias Funcionales (A -> B) y Multivaluadas (A ->> B) (1 por línea)"
+                    }</label>
+                    <textarea id="insp-fd-textarea" class="nlp-textarea" rows="3" style="font-family:var(--font-mono); font-size:12px;" placeholder="${
+                        isEn ? "e.g. postal_code -> city\nemp_id ->> language" : "ej. cod_postal -> ciudad\nempleado_id ->> idioma"
+                    }">${escapeHtml(fdLines)}</textarea>
+                </div>
+                <button type="button" class="btn btn-secondary btn-sm" id="btn-save-fds">
+                    ${isEn ? "Evaluate Normal Forms & Audit" : "Evaluar Formas Normales y Auditar"}
+                </button>
+                <div class="form-row" style="margin-top:8px;">
+                    <label for="insp-closure-seed">${
+                        isEn ? "Attribute Closure Calculator (X+)" : "Calculadora de Cierre de Atributos (X+)"
+                    }</label>
+                    <input id="insp-closure-seed" type="text" class="control-input-sm" value="${escapeHtml(defaultSeed)}" placeholder="col1, col2">
+                    <div id="insp-closure-output" class="sidebar-helper-text" style="margin-top:4px; font-family:var(--font-mono);">
+                        {${escapeHtml(initialClosure.seed.join(", "))}}⁺ = {${escapeHtml(initialClosure.closure.join(", "))}}
+                        ${
+                            initialClosure.isSuperkey
+                                ? `<span class="badge-uq" style="margin-left:4px;">${isEn ? "SUPERKEY" : "SUPERCLAVE"}</span>`
+                                : ""
+                        }
+                    </div>
+                </div>
+            </div>
         `;
 
         document.getElementById("btn-insp-back-proj")?.addEventListener("click", () => {
             callbacks.onSelectElement(null);
         });
+
+        document.getElementById("btn-save-fds")?.addEventListener("click", () => {
+            const rawLines = (document.getElementById("insp-fd-textarea")?.value || "")
+                .split("\n")
+                .map((l) => l.trim())
+                .filter(Boolean);
+            tbl.functional_dependencies = rawLines;
+            callbacks.onSchemaMutated(contract, true);
+            showToast(
+                isEn
+                    ? `Functional dependencies evaluated for '${tbl.name}'.`
+                    : `Dependencias funcionales evaluadas en '${tbl.name}'.`
+            );
+        });
+
+        const seedInput = document.getElementById("insp-closure-seed");
+        const closureOut = document.getElementById("insp-closure-output");
+        const fdArea = document.getElementById("insp-fd-textarea");
+        const refreshClosureLive = () => {
+            if (!seedInput || !closureOut) return;
+            const draftTbl = Object.assign({}, tbl, {
+                functional_dependencies: fdArea
+                    ? fdArea.value
+                          .split("\n")
+                          .map((s) => s.trim())
+                          .filter(Boolean)
+                    : tbl.functional_dependencies || [],
+            });
+            const res = computeClosureClient(draftTbl, seedInput.value);
+            closureOut.innerHTML = `{${escapeHtml(res.seed.join(", "))}}⁺ = {${escapeHtml(
+                res.closure.join(", ")
+            )}} ${
+                res.isSuperkey
+                    ? `<span class="badge-uq" style="margin-left:4px;">${isEn ? "SUPERKEY" : "SUPERCLAVE"}</span>`
+                    : ""
+            }`;
+        };
+        seedInput?.addEventListener("input", refreshClosureLive);
+        fdArea?.addEventListener("input", refreshClosureLive);
         document.getElementById("btn-delete-table")?.addEventListener("click", () => {
             callbacks.onDeleteTable(tbl.name);
         });

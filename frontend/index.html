@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ChemySQL · Estudio Relacional y Laboratorio SQL</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-    <link rel="stylesheet" href="/styles.css?v=18">
+    <link rel="stylesheet" href="/styles.css?v=27">
 </head>
 <body data-app-mode="standard" class="nlp-collapsed">
     <!-- Cabecera Principal de Instrumentación -->
@@ -175,11 +175,16 @@
                         </div>
                         <div id="workspace-path-display" class="workspace-path-text" title="Ruta de almacenamiento local">workspaces/</div>
                         <div class="workspace-folder-actions">
-                            <button id="btn-change-workspace" class="btn-tool" type="button" style="flex:1;" title="Conectar otra carpeta de tu PC para guardar y abrir proyectos">Cambiar Carpeta</button>
-                            <button id="btn-import-db" class="btn-tool" type="button" style="flex:1;" title="Abrir o importar un archivo .db / .sqlite existente desde tu PC">Abrir .db</button>
+                            <button id="btn-open-project" class="btn-tool" type="button" style="flex:1;" title="Abrir proyecto portable completo (.chemysql: modelo, posiciones Chen/ER, historial y datos)">Abrir .chemysql</button>
+                            <button id="btn-save-project" class="btn-tool" type="button" style="flex:1;" title="Guardar proyecto portable completo (.chemysql) para llevarlo a otro PC sin perder posiciones ni historial">Guardar .chemysql</button>
+                            <input id="web-project-file-input" type="file" accept=".chemysql,.json" class="hidden">
                         </div>
                         <div class="workspace-folder-actions">
-                            <button id="btn-save-db-as" class="btn-tool" type="button" style="flex:1;" title="Guardar una copia del proyecto actual (.db) en cualquier carpeta de tu PC">Guardar .db como...</button>
+                            <button id="btn-import-db" class="btn-tool" type="button" style="flex:1;" title="Importar un archivo SQLite físico (.db / .sqlite) existente desde tu PC">Importar .db</button>
+                            <button id="btn-save-db-as" class="btn-tool" type="button" style="flex:1;" title="Exportar una copia física del archivo SQLite (.db) actual">Exportar .db</button>
+                        </div>
+                        <div class="workspace-folder-actions">
+                            <button id="btn-change-workspace" class="btn-tool" type="button" style="flex:1;" title="Conectar otra carpeta de tu PC para almacenar los proyectos">Cambiar Carpeta</button>
                         </div>
                     </div>
                 </div>
@@ -319,6 +324,13 @@
                             </svg>
                             <span>Nueva Tabla</span>
                         </button>
+                        <button id="btn-canvas-add-view" class="btn-tool" type="button" title="Crear una Vista Virtual (CREATE VIEW) sobre el esquema">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                                <circle cx="12" cy="12" r="3"></circle>
+                            </svg>
+                            <span>Nueva Vista</span>
+                        </button>
                         <button id="btn-canvas-add-relation" class="btn-tool" type="button">
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
                                 <circle cx="6" cy="6" r="3"></circle>
@@ -389,6 +401,8 @@
 
                     <div class="sql-ddl-actions">
                         <button id="btn-reldiag-toggle-attrs" class="btn-tool" type="button" title="Mostrar u ocultar los óvalos de atributos en notación Chen">Ocultar Atributos</button>
+                        <button id="btn-reldiag-toggle-weakfk" class="btn-tool" type="button" title="Mostrar u ocultar claves foráneas heredadas dentro de entidades débiles en Chen">Mostrar FK Débil</button>
+                        <button id="btn-reldiag-toggle-physical" class="btn-tool hidden" type="button" title="Mostrar u ocultar tipos de datos físicos y políticas ON DELETE en Paso a Tablas">Mostrar Tipos / FK</button>
                         <button id="btn-reldiag-reset" class="btn-tool" type="button" title="Recalcular disposición automática">Reorganizar</button>
                         <button id="btn-reldiag-export-svg" class="btn-tool" type="button" title="Descargar diagrama vectorial en formato SVG">Exportar SVG</button>
                         <button id="btn-reldiag-export-png" class="btn btn-primary btn-sm" type="button" title="Descargar imagen de alta resolución en formato PNG">Exportar PNG</button>
@@ -495,8 +509,10 @@
                             <button type="button" class="dialect-btn" data-dialect="postgresql">PostgreSQL</button>
                         </div>
                         <div class="sql-ddl-actions">
+                            <button id="btn-toggle-ddl-style" class="btn-tool" type="button" title="Alternar entre código DDL estándar limpio (sin IF NOT EXISTS) y código idempotente (con IF NOT EXISTS)">IF NOT EXISTS: OFF</button>
                             <button id="btn-copy-ddl" class="btn-tool" type="button" title="Copiar el script DDL completo al portapapeles">Copiar Script</button>
-                            <button id="btn-download-ddl" class="btn-tool" type="button" title="Guardar o descargar el script DDL como archivo .sql">Guardar / Descargar .sql</button>
+                            <button id="btn-download-ddl" class="btn-tool" type="button" title="Guardar o descargar el script DDL como archivo .sql">Guardar DDL .sql</button>
+                            <button id="btn-export-full-sql" class="btn-tool" type="button" title="Exportar base de datos completa (DDL + INSERT en orden topológico) adaptada al dialecto seleccionado">Exportar BD + Datos (.sql)</button>
                             <button id="btn-apply-ddl-edits" class="btn btn-primary btn-sm" type="button" title="Sincronizar tus ediciones manuales del código DDL de vuelta al Lienzo ER y al Auditor">
                                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                     <polyline points="20 6 9 17 4 12"></polyline>
@@ -573,12 +589,31 @@
                                     <option value=">">&gt;</option>
                                     <option value="<">&lt;</option>
                                     <option value="LIKE">contiene</option>
+                                    <option value="IS NULL">IS NULL</option>
+                                    <option value="IS NOT NULL">IS NOT NULL</option>
                                 </select>
                                 <input id="qb-where-val" type="text" class="control-input-sm" placeholder="valor...">
                             </div>
                         </div>
                         <div class="builder-field">
-                            <label for="qb-order-col">4. Ordenar resultado (ORDER BY)</label>
+                            <label for="qb-group-col">4. Agrupar y Agregar (GROUP BY / HAVING)</label>
+                            <div class="inline-pair">
+                                <select id="qb-group-col" class="control-select-sm" title="Columna para GROUP BY">
+                                    <option value="">Sin GROUP BY</option>
+                                </select>
+                                <select id="qb-agg-fn" class="control-select-sm" title="Función de agregación">
+                                    <option value="">*</option>
+                                    <option value="COUNT(*)">COUNT(*)</option>
+                                    <option value="SUM">SUM(col)</option>
+                                    <option value="AVG">AVG(col)</option>
+                                    <option value="MAX">MAX(col)</option>
+                                    <option value="MIN">MIN(col)</option>
+                                </select>
+                                <input id="qb-having-val" type="text" class="control-input-sm" placeholder="HAVING ej. > 1">
+                            </div>
+                        </div>
+                        <div class="builder-field">
+                            <label for="qb-order-col">5. Ordenar resultado (ORDER BY)</label>
                             <div class="inline-pair">
                                 <select id="qb-order-col" class="control-select-sm">
                                     <option value="">Orden natural</option>
@@ -893,15 +928,15 @@
             <span class="statusbar-sep"></span>
             <button id="btn-lang-toggle" class="statusbar-btn" type="button" title="Cambiar idioma / Switch language">ES · EN</button>
             <span class="statusbar-sep"></span>
-            <span class="statusbar-item">ChemySQL v1.6.0</span>
+            <span class="statusbar-item">ChemySQL v1.7.0</span>
         </div>
     </footer>
 
     <!-- Módulos JavaScript -->
-    <script src="/er_canvas.js?v=23"></script>
-    <script src="/relational_diagram.js?v=23"></script>
-    <script src="/tutor_module.js?v=23"></script>
-    <script src="/sql_editor.js?v=23"></script>
-    <script type="module" src="/app.js?v=23"></script>
+    <script src="/er_canvas.js?v=27"></script>
+    <script src="/relational_diagram.js?v=27"></script>
+    <script src="/tutor_module.js?v=27"></script>
+    <script src="/sql_editor.js?v=27"></script>
+    <script type="module" src="/app.js?v=27"></script>
 </body>
 </html>

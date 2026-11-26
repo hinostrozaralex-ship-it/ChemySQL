@@ -172,6 +172,7 @@ class TutorEngine:
             )
 
         join_viz = self._build_join_visualizer(single_line, clauses)
+        rel_algebra = self._build_relational_algebra(single_line, clauses)
 
         return {
             "is_select": True,
@@ -179,6 +180,104 @@ class TutorEngine:
             "logical_order": [s["clause"] for s in steps],
             "steps": steps,
             "join_visualizer": join_viz,
+            "relational_algebra": rel_algebra,
+        }
+
+    def _build_relational_algebra(
+        self, sql: str, clauses: Dict[str, str]
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Traduce determinísticamente una consulta SELECT a su expresión equivalente
+        en Álgebra Relacional clásica / extendida (π, σ, ⋈, ×, γ, τ, ∪, ∩, −).
+        """
+        # Operaciones de conjuntos (UNION / INTERSECT / EXCEPT)
+        m_set = re.split(r"\b(UNION(?:\s+ALL)?|INTERSECT|EXCEPT)\b", sql, flags=re.IGNORECASE)
+        if len(m_set) >= 3:
+            op_raw = m_set[1].upper()
+            sym = "∪" if "UNION" in op_raw else "∩" if "INTERSECT" in op_raw else "−"
+            op_name = (
+                "Unión (∪)" if sym == "∪" else "Intersección (∩)" if sym == "∩" else "Diferencia (−)"
+            )
+            return {
+                "expression": f"(Q₁) {sym} (Q₂)",
+                "operators": [{"symbol": op_name, "detail": f"Combina los resultados compatibles mediante {op_raw}."}],
+            }
+
+        from_part = (clauses.get("from") or "").strip()
+        if not from_part:
+            return None
+
+        operators: List[Dict[str, str]] = []
+        # 1. Base relacional / Producto cartesiano / Reuniones (JOIN)
+        join_part = (clauses.get("join") or "").strip()
+        if "," in from_part and not join_part:
+            rels = [p.strip().split()[0] for p in from_part.split(",") if p.strip()]
+            expr = " × ".join(rels)
+            operators.append({"symbol": "× (Producto Cartesiano)", "detail": f"Combina todas las tuplas de {', '.join(rels)}."})
+        else:
+            base_tbl = from_part.split()[0]
+            expr = base_tbl
+            if join_part:
+                join_Regex = re.compile(
+                    r"\b(?P<jtype>(?:INNER|CROSS|(?:LEFT|RIGHT|FULL)(?:\s+OUTER)?)\s+)?JOIN\s+(?P<rtbl>[A-Za-z0-9_`\"\[\]]+)(?:\s+(?:AS\s+)?[A-Za-z0-9_]+)?(?:\s+ON\s+(?P<cond>.*?))?(?=\s+(?:INNER|LEFT|RIGHT|FULL|CROSS|JOIN)\b|$)",
+                    flags=re.IGNORECASE,
+                )
+                for mj in join_Regex.finditer(join_part):
+                    jtype = (mj.group("jtype") or "INNER").upper()
+                    rtbl = mj.group("rtbl")
+                    cond = (mj.group("cond") or "").strip()
+                    if "CROSS" in jtype:
+                        expr = f"({expr} × {rtbl})"
+                        operators.append({"symbol": "× (Producto Cartesiano)", "detail": f"Cruce total con {rtbl}."})
+                    else:
+                        jsym = (
+                            "⟕" if "LEFT" in jtype
+                            else "⟖" if "RIGHT" in jtype
+                            else "⟗" if "FULL" in jtype
+                            else "⋈"
+                        )
+                        jlabel = (
+                            "⟕ (Reunión Externa Izq.)" if jsym == "⟕"
+                            else "⟖ (Reunión Externa Der.)" if jsym == "⟖"
+                            else "⟗ (Reunión Externa Completa)" if jsym == "⟗"
+                            else "⋈ (Reunión / Theta-Join)"
+                        )
+                        sub = f"_{{{cond}}}" if cond else ""
+                        expr = f"({expr} {jsym}{sub} {rtbl})"
+                        operators.append({"symbol": jlabel, "detail": f"Empareja con {rtbl}" + (f" bajo [{cond}]" if cond else "")})
+
+        # 2. Selección σ (WHERE)
+        where_part = (clauses.get("where") or "").strip()
+        if where_part:
+            expr = f"σ_{{{where_part}}}({expr})"
+            operators.append({"symbol": "σ (Selección)", "detail": f"Filtra tuplas donde {where_part}"})
+
+        # 3. Agrupación γ (GROUP BY) y filtro de grupos σ (HAVING)
+        group_part = (clauses.get("group_by") or "").strip()
+        select_part = (clauses.get("select") or "*").strip()
+        if group_part:
+            expr = f"γ_{{{group_part}; {select_part}}}({expr})"
+            operators.append({"symbol": "γ (Agrupación y Agregación)", "detail": f"Agrupa por [{group_part}] calculando [{select_part}]"})
+            having_part = (clauses.get("having") or "").strip()
+            if having_part:
+                expr = f"σ_{{{having_part}}}({expr})"
+                operators.append({"symbol": "σ (Filtro HAVING sobre grupos)", "detail": f"Conserva grupos con {having_part}"})
+        else:
+            # 4. Proyección π (SELECT) cuando no es SELECT *
+            clean_sel = re.sub(r"^DISTINCT\s+", "", select_part, flags=re.IGNORECASE).strip()
+            if clean_sel != "*":
+                expr = f"π_{{{clean_sel}}}({expr})"
+                operators.append({"symbol": "π (Proyección)", "detail": f"Proyecta los atributos [{clean_sel}]"})
+
+        # 5. Ordenación τ (ORDER BY)
+        order_part = (clauses.get("order_by") or "").strip()
+        if order_part:
+            expr = f"τ_{{{order_part}}}({expr})"
+            operators.append({"symbol": "τ (Ordenación)", "detail": f"Ordena el resultado por [{order_part}]"})
+
+        return {
+            "expression": expr,
+            "operators": operators,
         }
 
     def _extract_select_clauses(self, sql: str) -> Dict[str, str]:

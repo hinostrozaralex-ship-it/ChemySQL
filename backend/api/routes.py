@@ -22,6 +22,9 @@ from backend.core.schema_model import (
     CellUpdateRequest,
     CreateIndexRequest,
     DeploySchemaRequest,
+    ExportFullSQLRequest,
+    ExportProjectRequest,
+    ImportProjectRequest,
     MasterSchemaContract,
     MockDataRequest,
     NLPInferenceRequest,
@@ -30,6 +33,7 @@ from backend.core.schema_model import (
     QueryExecutionRequest,
     RowInsertRequest,
     SaveDBAsRequest,
+    SaveLayoutRequest,
     SaveSQLRequest,
     WorkspaceSelectRequest,
 )
@@ -327,6 +331,94 @@ def save_database_copy_as(payload: SaveDBAsRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail=f"No se pudo guardar la copia .db: {exc}") from exc
 
 
+@router.post("/files/save-project")
+def save_portable_project_file(payload: ExportProjectRequest) -> Dict[str, Any]:
+    """Exporta o guarda un archivo de proyecto portable .chemysql (Contrato + Maquetación + Historial + .db opcional)."""
+    try:
+        bundle_info = engine.export_project_bundle(
+            contract=payload.schema_contract,
+            include_data=payload.include_data,
+        )
+        if NATIVE_WINDOW is not None:
+            import webview
+            dialog_type = getattr(webview, "FileDialog", None)
+            save_mode = dialog_type.SAVE if dialog_type else webview.SAVE_DIALOG
+            result = NATIVE_WINDOW.create_file_dialog(
+                save_mode,
+                directory=str(engine.workspaces_dir),
+                save_filename=bundle_info["filename"],
+                file_types=("Proyecto ChemySQL (*.chemysql)", "JSON (*.json)", "Todos los archivos (*.*)"),
+            )
+            if not result:
+                return {"saved": False}
+            chosen = result[0] if isinstance(result, (list, tuple)) else result
+            if not chosen:
+                return {"saved": False}
+            dest = Path(str(chosen))
+            if dest.suffix == "":
+                dest = dest.with_suffix(".chemysql")
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(bundle_info["content"], encoding="utf-8")
+            return {
+                "saved": True,
+                "filename": dest.name,
+                "path": str(dest),
+                "has_embedded_db": bundle_info["has_embedded_db"],
+            }
+        return {
+            "saved": False,
+            "web_download": True,
+            "filename": bundle_info["filename"],
+            "mime_type": bundle_info["mime_type"],
+            "content": bundle_info["content"],
+            "has_embedded_db": bundle_info["has_embedded_db"],
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"No se pudo exportar el proyecto .chemysql: {exc}") from exc
+
+
+@router.post("/files/open-project")
+def open_portable_project_file(payload: Optional[ImportProjectRequest] = None) -> Dict[str, Any]:
+    """Abre e importa un archivo de proyecto portable .chemysql desde cualquier carpeta del PC o subida web."""
+    try:
+        raw_content: Optional[str] = payload.bundle_content if payload else None
+        source_path: Optional[str] = None
+        if not raw_content:
+            if NATIVE_WINDOW is None:
+                return {"imported": False, "requires_web_upload": True}
+            import webview
+            dialog_type = getattr(webview, "FileDialog", None)
+            open_mode = dialog_type.OPEN if dialog_type else webview.OPEN_DIALOG
+            result = NATIVE_WINDOW.create_file_dialog(
+                open_mode,
+                directory=str(engine.workspaces_dir),
+                allow_multiple=False,
+                file_types=("Proyectos ChemySQL (*.chemysql;*.json)", "Todos los archivos (*.*)"),
+            )
+            if not result or len(result) == 0:
+                return {"imported": False}
+            src_file = Path(str(result[0]))
+            if not src_file.exists():
+                raise FileNotFoundError(f"El archivo '{src_file}' no existe.")
+            raw_content = src_file.read_text(encoding="utf-8")
+            source_path = str(src_file)
+
+        imported_res = engine.import_project_bundle(raw_content)
+        imported_res["source_path"] = source_path
+        return imported_res
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Error al abrir proyecto .chemysql: {exc}") from exc
+
+
+@router.post("/schema/save-layout")
+def save_visual_layout_endpoint(payload: SaveLayoutRequest) -> Dict[str, Any]:
+    """Guarda silenciosamente posiciones X/Y del Lienzo ER y maquetación de Chen/Tablas en .schema.json."""
+    try:
+        return engine.save_schema_layout(payload.schema_contract)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/databases/{db_name}")
 def get_database_schema(db_name: str) -> Dict[str, Any]:
     try:
@@ -413,6 +505,19 @@ def parse_edited_ddl_to_schema(payload: ParseDDLRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail=f"Error de sintaxis en el DDL editado: {exc}") from exc
 
 
+@router.post("/schema/export-sql")
+def export_full_database_sql_endpoint(payload: ExportFullSQLRequest) -> Dict[str, Any]:
+    """Genera un script .sql completo (DDL transpilado + INSERT en orden topológico si existen datos)."""
+    try:
+        return engine.export_full_database_sql(
+            contract=payload.schema_contract,
+            dialect=payload.dialect,
+            include_data=payload.include_data,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Error al exportar script SQL completo: {exc}") from exc
+
+
 @router.post("/schema/autofix")
 def apply_auditor_autofix(req: AutoFixRequest) -> Dict[str, Any]:
     try:
@@ -433,7 +538,10 @@ def approve_and_deploy_schema(req: DeploySchemaRequest) -> Dict[str, Any]:
             contract=req.schema_contract,
             populate_mock_data=req.populate_mock_data,
             mock_rows_per_table=req.mock_rows_per_table,
+            confirmed_destructive=req.confirmed_destructive_migration,
         )
+        if result.get("requires_migration_confirmation"):
+            return result
         deployed_contract = MasterSchemaContract.model_validate(result["schema_contract"])
         result["ddl_previews"] = _build_ddl_previews(deployed_contract)
         result["history"] = engine.get_version_history(deployed_contract.db_name)

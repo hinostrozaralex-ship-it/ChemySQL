@@ -28,6 +28,21 @@ import { SchemaUndoManager } from "./modules/undo_manager.js";
     let tutorCtrl = null;
     let sqlEditor = null;
     let ddlEditor = null;
+    let layoutSaveTimer = null;
+
+    function schedulePersistVisualLayout(updatedContract) {
+        if (!updatedContract) return;
+        state.contract = updatedContract;
+        undoManager.record(state.contract);
+        clearTimeout(layoutSaveTimer);
+        layoutSaveTimer = setTimeout(() => {
+            if (!state.contract) return;
+            apiFetch("/api/schema/save-layout", {
+                method: "POST",
+                body: JSON.stringify({ schema_contract: state.contract }),
+            }).catch(() => {});
+        }, 450);
+    }
 
     function restoreUserPreferences() {
         const savedTheme = readStorage(STORAGE_KEYS.theme);
@@ -71,11 +86,14 @@ import { SchemaUndoManager } from "./modules/undo_manager.js";
             onSelectElement: (sel) => handleElementSelected(sel),
             onSchemaMutated: (contract, runAudit = true) => handleLocalSchemaMutation(contract, runAudit),
             onDeleteTable: (tableName) => requestDeleteTable(tableName),
+            onLayoutChanged: (updatedContract) => schedulePersistVisualLayout(updatedContract),
         });
 
         relDiagram = new window.RelationalDiagramController({
             onSelectElement: (sel) => handleElementSelected(sel),
             onNotify: (msg) => showToast(msg),
+            getLang: () => state.lang,
+            onLayoutChanged: (updatedContract) => schedulePersistVisualLayout(updatedContract),
         });
 
         tutorCtrl = new window.TutorController({
@@ -315,6 +333,7 @@ import { SchemaUndoManager } from "./modules/undo_manager.js";
         if (relDiagram) {
             relDiagram.render(state.contract);
         }
+        syncRelDiagToolbarButtons();
         renderAuditorAlerts();
         renderInspectorEditor();
         renderDDLPreview();
@@ -777,6 +796,29 @@ import { SchemaUndoManager } from "./modules/undo_manager.js";
         });
     }
 
+    function syncRelDiagToolbarButtons() {
+        if (!relDiagram) return;
+        const isChen = relDiagram.submode === "chen";
+        const btnAttrs = document.getElementById("btn-reldiag-toggle-attrs");
+        const btnWeakFk = document.getElementById("btn-reldiag-toggle-weakfk");
+        const btnPhys = document.getElementById("btn-reldiag-toggle-physical");
+
+        if (btnAttrs) {
+            btnAttrs.classList.toggle("hidden", !isChen);
+            btnAttrs.textContent = t(relDiagram.showAttributes ? "relHideAttrs" : "relShowAttrs", state.lang);
+        }
+        if (btnWeakFk) {
+            btnWeakFk.classList.toggle("hidden", !isChen);
+            btnWeakFk.textContent = t(relDiagram.showWeakFkAttrs ? "relHideWeakFk" : "relShowWeakFk", state.lang);
+            btnWeakFk.classList.toggle("active", Boolean(relDiagram.showWeakFkAttrs));
+        }
+        if (btnPhys) {
+            btnPhys.classList.toggle("hidden", isChen);
+            btnPhys.textContent = t(relDiagram.showPhysicalDetails ? "relHidePhysical" : "relShowPhysical", state.lang);
+            btnPhys.classList.toggle("active", Boolean(relDiagram.showPhysicalDetails));
+        }
+    }
+
     function renderDDLPreview() {
         const rawSql = state.ddlPreviews[state.activeDialect] || "-- Sin DDL generado";
         if (ddlEditor) {
@@ -794,6 +836,12 @@ import { SchemaUndoManager } from "./modules/undo_manager.js";
                 postgresql: "POSTGRESQL",
             };
             dialectBadge.textContent = labels[state.activeDialect] || state.activeDialect.toUpperCase();
+        }
+        const styleBtn = document.getElementById("btn-toggle-ddl-style");
+        if (styleBtn) {
+            const isIdem = state.contract && state.contract.ddl_style === "idempotent";
+            styleBtn.textContent = isIdem ? "IF NOT EXISTS: ON" : "IF NOT EXISTS: OFF";
+            styleBtn.classList.toggle("active", Boolean(isIdem));
         }
     }
 
@@ -879,6 +927,48 @@ import { SchemaUndoManager } from "./modules/undo_manager.js";
         }
     }
 
+    async function exportFullDatabaseSQL() {
+        if (!state.contract) return;
+        try {
+            const exp = await apiFetch("/api/schema/export-sql", {
+                method: "POST",
+                body: JSON.stringify({
+                    schema_contract: state.contract,
+                    dialect: state.activeDialect,
+                    include_data: true,
+                }),
+            });
+            try {
+                const savedRes = await apiFetch("/api/files/save-sql", {
+                    method: "POST",
+                    body: JSON.stringify({
+                        content: exp.content,
+                        filename: exp.filename,
+                        save_as: true,
+                    }),
+                });
+                if (savedRes.saved) {
+                    showToast(
+                        `Exportado (${state.activeDialect.toUpperCase()}): ${exp.table_count} tablas y ${exp.row_count} registros en ${savedRes.path}`
+                    );
+                }
+            } catch (_saveErr) {
+                const blob = new Blob([exp.content], { type: exp.mime_type || "text/sql;charset=utf-8" });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = exp.filename;
+                a.click();
+                URL.revokeObjectURL(url);
+                showToast(
+                    `Descargado ${exp.filename} (${exp.table_count} tablas · ${exp.row_count} registros).`
+                );
+            }
+        } catch (err) {
+            showToast(err.message);
+        }
+    }
+
     function handleElementSelected(selection) {
         state.selectedElement = selection;
         renderInspectorEditor();
@@ -917,16 +1007,20 @@ import { SchemaUndoManager } from "./modules/undo_manager.js";
         const prev = undoManager.undo();
         if (!prev) return;
         state.selectedElement = null;
+        if (relDiagram) relDiagram.lastDbKey = "";
         await handleLocalSchemaMutation(prev, true, false);
-        showToast("Deshacer aplicado al esquema.");
+        syncRelDiagToolbarButtons();
+        showToast(state.lang === "en" ? "Undo applied to schema." : "Deshacer aplicado al esquema.");
     }
 
     async function performSchemaRedo() {
         const next = undoManager.redo();
         if (!next) return;
         state.selectedElement = null;
+        if (relDiagram) relDiagram.lastDbKey = "";
         await handleLocalSchemaMutation(next, true, false);
-        showToast("Rehacer aplicado al esquema.");
+        syncRelDiagToolbarButtons();
+        showToast(state.lang === "en" ? "Redo applied to schema." : "Rehacer aplicado al esquema.");
     }
 
     /* ======================================================================
@@ -979,7 +1073,7 @@ import { SchemaUndoManager } from "./modules/undo_manager.js";
         }
     }
 
-    async function approveAndDeploySchema() {
+    async function approveAndDeploySchema(confirmedDestructive = false) {
         if (!state.contract) return;
         const existingDb = state.databases.find((d) => d.db_name === state.contract.db_name);
         const shouldPopulateMock = !existingDb || (existingDb.total_rows || 0) === 0;
@@ -990,8 +1084,58 @@ import { SchemaUndoManager } from "./modules/undo_manager.js";
                     schema_contract: state.contract,
                     populate_mock_data: shouldPopulateMock,
                     mock_rows_per_table: 12,
+                    confirmed_destructive_migration: Boolean(confirmedDestructive),
                 }),
             });
+
+            if (res.requires_migration_confirmation && res.migration_warning) {
+                const warn = res.migration_warning;
+                const details = [];
+                if (warn.dropped_tables && warn.dropped_tables.length > 0) {
+                    details.push(`Tablas a eliminar: ${warn.dropped_tables.join(", ")}`);
+                }
+                if (warn.dropped_columns && warn.dropped_columns.length > 0) {
+                    details.push(
+                        `Columnas a eliminar: ${warn.dropped_columns
+                            .map((dc) => `${dc.table}.${dc.column}`)
+                            .join(", ")}`
+                    );
+                }
+                const delModal = document.getElementById("confirm-delete-modal");
+                const titleEl = document.getElementById("confirm-del-title");
+                const subEl = document.getElementById("confirm-del-subtitle");
+                const msgEl = document.getElementById("confirm-del-message");
+                const confirmBtn = document.getElementById("btn-confirm-del-modal");
+                if (delModal && msgEl) {
+                    if (titleEl) {
+                        titleEl.textContent =
+                            state.lang === "en"
+                                ? "Destructive Migration Detected"
+                                : "Migración con Eliminación de Estructura";
+                    }
+                    if (subEl) {
+                        subEl.textContent =
+                            state.lang === "en"
+                                ? "Automatic .db.bak backup will be created before applying"
+                                : "Se creará copia automática en backups/ (.db.bak) antes de aplicar";
+                    }
+                    msgEl.textContent = `${details.join(" · ")}. Las tablas afectadas contienen ${warn.affected_rows} registro(s) en disco. ¿Deseas confirmar la migración?`;
+                    if (confirmBtn) {
+                        confirmBtn.textContent =
+                            state.lang === "en" ? "Backup & Migrate" : "Crear Backup y Migrar";
+                    }
+                    pendingDeleteCallback = async () => {
+                        if (confirmBtn) {
+                            confirmBtn.textContent =
+                                state.lang === "en" ? "Delete Permanently" : "Eliminar Definitivamente";
+                        }
+                        await approveAndDeploySchema(true);
+                    };
+                    delModal.classList.remove("hidden");
+                }
+                return;
+            }
+
             state.contract = res.schema_contract;
             undoManager.reset(state.contract);
             state.activeDbName = state.contract.db_name;
@@ -1005,10 +1149,11 @@ import { SchemaUndoManager } from "./modules/undo_manager.js";
                 state.explorer.activeTable = state.contract.tables[0].name;
                 await loadExplorerTableRows();
             }
+            const bakNote = res.backup_path ? " (Backup .bak creado en backups/)" : "";
             showToast(
                 shouldPopulateMock
                     ? `Esquema v${state.contract.version} aprobado y desplegado en workspaces/${state.contract.db_name}.db con datos de prueba coherentes.`
-                    : `Esquema v${state.contract.version} actualizado en workspaces/${state.contract.db_name}.db preservando los registros existentes.`
+                    : `Esquema v${state.contract.version} actualizado en workspaces/${state.contract.db_name}.db preservando los registros existentes.${bakNote}`
             );
         } catch (err) {
             showToast(`Error al desplegar base de datos: ${err.message}`);
@@ -1023,17 +1168,22 @@ import { SchemaUndoManager } from "./modules/undo_manager.js";
         if (!container || !state.contract) return;
 
         const tables = state.contract.tables || [];
-        if (!state.explorer.activeTable && tables.length > 0) {
-            state.explorer.activeTable = tables[0].name;
+        const views = state.contract.views || [];
+        const allItems = [
+            ...tables.map((t) => ({ name: t.name, isView: false })),
+            ...views.map((v) => ({ name: v.name, isView: true })),
+        ];
+        if (!state.explorer.activeTable && allItems.length > 0) {
+            state.explorer.activeTable = allItems[0].name;
         }
 
-        container.innerHTML = tables
+        container.innerHTML = allItems
             .map(
-                (t) => `
+                (it) => `
                 <button type="button" class="table-pill-btn ${
-                    state.explorer.activeTable === t.name ? "active" : ""
-                }" data-exp-table="${escapeHtml(t.name)}">
-                    ${escapeHtml(t.name)}
+                    state.explorer.activeTable === it.name ? "active" : ""
+                }" data-exp-table="${escapeHtml(it.name)}">
+                    ${it.isView ? '<i class="badge-view" style="margin-right:4px;">VIEW</i>' : ""}${escapeHtml(it.name)}
                 </button>
             `
             )
@@ -1062,10 +1212,15 @@ import { SchemaUndoManager } from "./modules/undo_manager.js";
                 state.explorer.page
             }&page_size=${state.explorer.pageSize}&search=${encodeURIComponent(state.explorer.search)}`;
             const data = await apiFetch(url);
+            state.explorer.isView = Boolean(data.is_view);
             state.explorer.columns = data.columns || [];
             state.explorer.rows = data.rows || [];
             state.explorer.totalRows = data.total_rows || 0;
             state.explorer.totalPages = data.total_pages || 1;
+            const addRowBtn = document.getElementById("btn-explorer-add-row");
+            const expSqlBtn = document.getElementById("btn-explorer-export-sql");
+            if (addRowBtn) addRowBtn.classList.toggle("hidden", state.explorer.isView);
+            if (expSqlBtn) expSqlBtn.title = state.explorer.isView ? "Exportar definición CREATE VIEW" : "Exportar sentencias INSERT SQL";
             renderExplorerDataGrid();
         } catch (err) {
             showToast(`Error al leer registros: ${err.message}`);
@@ -1079,6 +1234,7 @@ import { SchemaUndoManager } from "./modules/undo_manager.js";
         const pageInd = document.getElementById("explorer-page-indicator");
         if (!thead || !tbody) return;
 
+        const isView = Boolean(state.explorer.isView);
         const cols = state.explorer.columns;
         const pkCols = cols.filter((c) => c.is_pk);
         const effectivePkCols = pkCols.length > 0 ? pkCols : [cols[0] || { name: "id" }];
@@ -1098,12 +1254,16 @@ import { SchemaUndoManager } from "./modules/undo_manager.js";
                 `
                     )
                     .join("")}
-                <th>Acciones</th>
+                ${isView ? "" : "<th>Acciones</th>"}
             </tr>
         `;
 
         if (state.explorer.rows.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="${cols.length + 1}" style="text-align:center; padding:24px; color:var(--text-secondary);">No hay registros en esta tabla. Usa el botón "Mock Data" o "+ Nuevo Registro".</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="${cols.length + (isView ? 0 : 1)}" style="text-align:center; padding:24px; color:var(--text-secondary);">${
+                isView
+                    ? "La vista virtual no devolvió registros actualmente."
+                    : 'No hay registros en esta tabla. Usa el botón "Mock Data" o "+ Nuevo Registro".'
+            }</td></tr>`;
         } else {
             tbody.innerHTML = state.explorer.rows
                 .map((row) => {
@@ -1116,7 +1276,7 @@ import { SchemaUndoManager } from "./modules/undo_manager.js";
                     const cellsHtml = cols
                         .map((c) => {
                             const val = row[c.name];
-                            if (c.is_fk && c.fk_target_table && val !== null && val !== undefined) {
+                            if (!isView && c.is_fk && c.fk_target_table && val !== null && val !== undefined) {
                                 return `
                                     <td>
                                         <button type="button" class="fk-cell-btn" data-fk-table="${escapeHtml(
@@ -1132,6 +1292,9 @@ import { SchemaUndoManager } from "./modules/undo_manager.js";
                             const isNull = val === null || val === undefined;
                             const isNum = typeof val === "number";
                             const rendered = isNull ? '<span class="cell-null">NULL</span>' : escapeHtml(val);
+                            if (isView) {
+                                return `<td class="${isNum ? "cell-num" : ""}">${rendered}</td>`;
+                            }
                             return `<td class="${isNum ? "cell-num" : ""}" data-edit-col="${escapeHtml(c.name)}" data-pk-val="${escapeHtml(
                                 pkVal
                             )}" data-pk-json="${escapeHtml(pkJson)}" data-raw-val="${isNull ? "" : escapeHtml(val)}" title="${
@@ -1143,11 +1306,15 @@ import { SchemaUndoManager } from "./modules/undo_manager.js";
                     return `
                         <tr>
                             ${cellsHtml}
-                            <td>
+                            ${
+                                isView
+                                    ? ""
+                                    : `<td>
                                 <button type="button" class="btn-xs" data-del-pk="${escapeHtml(
                                     pkVal
                                 )}" data-pk-json="${escapeHtml(pkJson)}" style="color:var(--accent-crimson);">Eliminar</button>
-                            </td>
+                            </td>`
+                            }
                         </tr>
                     `;
                 })
@@ -1155,7 +1322,9 @@ import { SchemaUndoManager } from "./modules/undo_manager.js";
         }
 
         if (summary) {
-            summary.textContent = `${state.explorer.totalRows} registros en '${state.explorer.activeTable}'`;
+            summary.textContent = isView
+                ? `${state.explorer.totalRows} registros en vista '${state.explorer.activeTable}' (Solo lectura)`
+                : `${state.explorer.totalRows} registros en '${state.explorer.activeTable}'`;
         }
         if (pageInd) {
             pageInd.textContent = `Página ${state.explorer.page} de ${state.explorer.totalPages}`;
@@ -1308,6 +1477,7 @@ import { SchemaUndoManager } from "./modules/undo_manager.js";
         const tblSel = document.getElementById("qb-table");
         const joinSel = document.getElementById("qb-join");
         const whereColSel = document.getElementById("qb-where-col");
+        const groupColSel = document.getElementById("qb-group-col");
         const orderColSel = document.getElementById("qb-order-col");
         if (!tblSel || !state.contract) return;
 
@@ -1351,6 +1521,9 @@ import { SchemaUndoManager } from "./modules/undo_manager.js";
                 )
                 .join("");
             whereColSel.innerHTML = `<option value="">Sin filtro WHERE</option>` + colOpts;
+            if (groupColSel) {
+                groupColSel.innerHTML = `<option value="">Sin GROUP BY</option>` + colOpts;
+            }
             orderColSel.innerHTML = `<option value="">Orden natural</option>` + colOpts;
         };
 
@@ -1363,7 +1536,10 @@ import { SchemaUndoManager } from "./modules/undo_manager.js";
         const textarea = document.getElementById("sql-code-textarea");
         if (!container || !textarea || !state.contract) return;
 
-        const chips = (state.contract.tables || []).map((t) => t.name);
+        const chips = [
+            ...(state.contract.tables || []).map((t) => t.name),
+            ...(state.contract.views || []).map((v) => v.name),
+        ];
         container.innerHTML = chips
             .map(
                 (name) =>
@@ -1828,6 +2004,11 @@ import { SchemaUndoManager } from "./modules/undo_manager.js";
                 state.lang = state.lang === "en" ? "es" : "en";
                 writeStorage(LANG_STORAGE_KEY, state.lang);
                 applyLanguageToDOM(state.lang);
+                syncRelDiagToolbarButtons();
+                if (relDiagram && state.contract) {
+                    relDiagram.render(state.contract);
+                }
+                renderInspectorEditor();
                 showToast(state.lang === "en" ? "Language switched to English." : "Idioma cambiado a Español.");
             });
         }
@@ -1980,11 +2161,8 @@ import { SchemaUndoManager } from "./modules/undo_manager.js";
                 document.querySelectorAll("[data-reldiag-mode]").forEach((b) =>
                     b.classList.toggle("active", b === btn)
                 );
-                const btnToggleAttrs = document.getElementById("btn-reldiag-toggle-attrs");
-                if (btnToggleAttrs) {
-                    btnToggleAttrs.classList.toggle("hidden", mode !== "chen");
-                }
                 if (relDiagram) relDiagram.setSubmode(mode);
+                syncRelDiagToolbarButtons();
             });
         });
 
@@ -1992,8 +2170,24 @@ import { SchemaUndoManager } from "./modules/undo_manager.js";
         if (btnRelToggleAttrs) {
             btnRelToggleAttrs.addEventListener("click", () => {
                 if (!relDiagram) return;
-                const showing = relDiagram.toggleAttributes();
-                btnRelToggleAttrs.textContent = showing ? "Ocultar Atributos" : "Mostrar Atributos";
+                relDiagram.toggleAttributes();
+                syncRelDiagToolbarButtons();
+            });
+        }
+        const btnRelToggleWeakFk = document.getElementById("btn-reldiag-toggle-weakfk");
+        if (btnRelToggleWeakFk) {
+            btnRelToggleWeakFk.addEventListener("click", () => {
+                if (!relDiagram) return;
+                relDiagram.toggleWeakFkAttrs();
+                syncRelDiagToolbarButtons();
+            });
+        }
+        const btnRelTogglePhys = document.getElementById("btn-reldiag-toggle-physical");
+        if (btnRelTogglePhys) {
+            btnRelTogglePhys.addEventListener("click", () => {
+                if (!relDiagram) return;
+                relDiagram.togglePhysicalDetails();
+                syncRelDiagToolbarButtons();
             });
         }
         const btnRelReset = document.getElementById("btn-reldiag-reset");
@@ -2020,6 +2214,21 @@ import { SchemaUndoManager } from "./modules/undo_manager.js";
             });
         });
 
+        const btnToggleDdlStyle = document.getElementById("btn-toggle-ddl-style");
+        if (btnToggleDdlStyle) {
+            btnToggleDdlStyle.addEventListener("click", async () => {
+                if (!state.contract) return;
+                state.contract.ddl_style =
+                    state.contract.ddl_style === "idempotent" ? "standard" : "idempotent";
+                await handleLocalSchemaMutation(state.contract, true, true);
+                showToast(
+                    state.contract.ddl_style === "idempotent"
+                        ? "Modo DDL Idempotente activado (con IF NOT EXISTS)."
+                        : "Modo DDL Estándar activado (limpio sin IF NOT EXISTS)."
+                );
+            });
+        }
+
         const btnApplyDdlEdits = document.getElementById("btn-apply-ddl-edits");
         if (btnApplyDdlEdits) {
             btnApplyDdlEdits.addEventListener("click", () => applyDDLEditsToSchema());
@@ -2041,6 +2250,11 @@ import { SchemaUndoManager } from "./modules/undo_manager.js";
         const btnDownloadDdl = document.getElementById("btn-download-ddl");
         if (btnDownloadDdl) {
             btnDownloadDdl.addEventListener("click", () => downloadDDLScript());
+        }
+
+        const btnExportFullSql = document.getElementById("btn-export-full-sql");
+        if (btnExportFullSql) {
+            btnExportFullSql.addEventListener("click", () => exportFullDatabaseSQL());
         }
 
         // Añadir nueva tabla desde el lienzo o barra lateral
@@ -2091,6 +2305,36 @@ import { SchemaUndoManager } from "./modules/undo_manager.js";
 
         const btnCanvasAddTable = document.getElementById("btn-canvas-add-table");
         if (btnCanvasAddTable) btnCanvasAddTable.addEventListener("click", addTableHandler);
+
+        const btnCanvasAddView = document.getElementById("btn-canvas-add-view");
+        if (btnCanvasAddView) {
+            btnCanvasAddView.addEventListener("click", () => {
+                if (!state.contract) return;
+                if (!Array.isArray(state.contract.views)) {
+                    state.contract.views = [];
+                }
+                const vIdx = state.contract.views.length + 1;
+                const baseTbl = state.contract.tables[0] ? state.contract.tables[0].name : "tabla";
+                const baseCols =
+                    state.contract.tables[0] && state.contract.tables[0].columns && state.contract.tables[0].columns.length > 0
+                        ? state.contract.tables[0].columns.slice(0, 3).map((c) => c.name)
+                        : ["*"];
+                const newViewName = `vista_${baseTbl}_${vIdx}`;
+                const newVw = {
+                    name: newViewName,
+                    select_sql: `SELECT ${baseCols.join(", ")}\nFROM ${baseTbl}`,
+                    columns: baseCols[0] === "*" ? [] : baseCols,
+                    description: `Vista virtual sobre ${baseTbl}`,
+                    position_x: 100 + ((vIdx - 1) % 3) * 300,
+                    position_y: 420 + Math.floor((vIdx - 1) / 3) * 180,
+                    tutor_explanation: "Tabla virtual de solo lectura calculada dinámicamente a partir de una consulta SELECT.",
+                };
+                state.contract.views.push(newVw);
+                state.selectedElement = { type: "view", view: newViewName, data: newVw };
+                activateRightTab("inspector");
+                handleLocalSchemaMutation(state.contract, true);
+            });
+        }
 
         const btnCanvasUndo = document.getElementById("btn-canvas-undo");
         const btnCanvasRedo = document.getElementById("btn-canvas-redo");
@@ -2298,19 +2542,56 @@ import { SchemaUndoManager } from "./modules/undo_manager.js";
             btnSaveSqlAs.addEventListener("click", () => saveCurrentSQLFile(true));
         }
 
+        const qbWhereOp = document.getElementById("qb-where-op");
+        const qbWhereVal = document.getElementById("qb-where-val");
+        if (qbWhereOp && qbWhereVal) {
+            qbWhereOp.addEventListener("change", () => {
+                const isNullOp = qbWhereOp.value === "IS NULL" || qbWhereOp.value === "IS NOT NULL";
+                qbWhereVal.classList.toggle("hidden", isNullOp);
+            });
+        }
+
         document.getElementById("btn-apply-guided-sql").addEventListener("click", () => {
             const tbl = document.getElementById("qb-table").value;
             const joinClause = document.getElementById("qb-join").value;
             const whereCol = document.getElementById("qb-where-col").value;
             const whereOp = document.getElementById("qb-where-op").value;
             const whereVal = document.getElementById("qb-where-val").value.trim();
+            const groupCol = document.getElementById("qb-group-col")?.value || "";
+            const aggFn = document.getElementById("qb-agg-fn")?.value || "";
+            const havingRaw = document.getElementById("qb-having-val")?.value.trim() || "";
             const orderCol = document.getElementById("qb-order-col").value;
             const orderDir = document.getElementById("qb-order-dir").value;
 
             if (!tbl) return;
-            const lines = [`SELECT *`, `FROM ${tbl}`];
+            const tblObj = ((state.contract && state.contract.tables) || []).find((t) => t.name === tbl);
+            const numColObj =
+                tblObj &&
+                (tblObj.columns || []).find(
+                    (c) => !c.is_pk && !c.is_fk && /INT|DEC|NUM|FLOAT|REAL/i.test(c.data_type || "")
+                );
+            const defaultAggCol = numColObj ? `${tbl}.${numColObj.name}` : orderCol || `${tbl}.id`;
+
+            let selectExpr = "*";
+            let aggAliasExpr = "COUNT(*)";
+            if (aggFn === "COUNT(*)") {
+                aggAliasExpr = "COUNT(*)";
+                selectExpr = groupCol ? `${groupCol}, COUNT(*) AS total` : `COUNT(*) AS total`;
+            } else if (aggFn) {
+                aggAliasExpr = `${aggFn}(${defaultAggCol})`;
+                selectExpr = groupCol
+                    ? `${groupCol}, ${aggAliasExpr} AS resultado`
+                    : `${aggAliasExpr} AS resultado`;
+            } else if (groupCol) {
+                selectExpr = `${groupCol}, COUNT(*) AS total`;
+                aggAliasExpr = "COUNT(*)";
+            }
+
+            const lines = [`SELECT ${selectExpr}`, `FROM ${tbl}`];
             if (joinClause) lines.push(joinClause);
-            if (whereCol && whereVal) {
+            if (whereCol && (whereOp === "IS NULL" || whereOp === "IS NOT NULL")) {
+                lines.push(`WHERE ${whereCol} ${whereOp}`);
+            } else if (whereCol && whereVal) {
                 const formattedVal =
                     whereOp === "LIKE"
                         ? `'%${whereVal}%'`
@@ -2319,8 +2600,19 @@ import { SchemaUndoManager } from "./modules/undo_manager.js";
                         : `'${whereVal}'`;
                 lines.push(`WHERE ${whereCol} ${whereOp} ${formattedVal}`);
             }
+            if (groupCol) {
+                lines.push(`GROUP BY ${groupCol}`);
+                if (havingRaw) {
+                    const hv = /^(COUNT|SUM|AVG|MIN|MAX)\b/i.test(havingRaw)
+                        ? havingRaw
+                        : `${aggAliasExpr} ${havingRaw}`;
+                    lines.push(`HAVING ${hv}`);
+                }
+            }
             if (orderCol) {
                 lines.push(`ORDER BY ${orderCol} ${orderDir}`);
+            } else if (groupCol && (aggFn || havingRaw)) {
+                lines.push(`ORDER BY ${aggFn === "COUNT(*)" || !aggFn ? "total" : "resultado"} ${orderDir}`);
             }
             lines.push(`LIMIT 25;`);
             setSQLCodeValue(lines.join("\n"));
@@ -2823,6 +3115,101 @@ import { SchemaUndoManager } from "./modules/undo_manager.js";
                     if (res.saved) {
                         showToast(`Copia de base de datos guardada en: ${res.path}`);
                     }
+                } catch (err) {
+                    showToast(err.message);
+                }
+            });
+        }
+
+        const btnSaveProject = document.getElementById("btn-save-project");
+        if (btnSaveProject) {
+            btnSaveProject.addEventListener("click", async () => {
+                if (!state.contract) return;
+                try {
+                    const res = await apiFetch("/api/files/save-project", {
+                        method: "POST",
+                        body: JSON.stringify({
+                            schema_contract: state.contract,
+                            include_data: true,
+                        }),
+                    });
+                    if (res.saved) {
+                        showToast(
+                            `Proyecto portable guardado en: ${res.path}${
+                                res.has_embedded_db ? " (incluye datos SQLite)" : ""
+                            }`
+                        );
+                    } else if (res.web_download && res.content) {
+                        const blob = new Blob([res.content], { type: res.mime_type || "application/json;charset=utf-8" });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement("a");
+                        a.href = url;
+                        a.download = res.filename || `${state.contract.db_name}.chemysql`;
+                        a.click();
+                        URL.revokeObjectURL(url);
+                        showToast(`Proyecto portable descargado: ${a.download}`);
+                    }
+                } catch (err) {
+                    showToast(err.message);
+                }
+            });
+        }
+
+        const applyImportedProjectResult = async (res) => {
+            if (!res || !res.imported || !res.schema_contract) return;
+            state.contract = res.schema_contract;
+            state.activeDbName = state.contract.db_name;
+            state.ddlPreviews = res.ddl_previews || state.ddlPreviews;
+            state.history = res.history || [];
+            state.databases = res.databases || state.databases;
+            if (relDiagram) relDiagram.lastDbKey = "";
+            undoManager.reset(state.contract);
+            syncAllViews();
+            erCanvas.fitToViewport();
+            if (state.contract.is_deployed && state.contract.tables.length > 0) {
+                state.explorer.activeTable = state.contract.tables[0].name;
+                await loadExplorerTableRows();
+            } else {
+                renderUndeployedExplorerNotice();
+            }
+            showToast(
+                `Proyecto '${state.contract.title || state.contract.db_name}' restaurado con su maquetación e historial.`
+            );
+        };
+
+        const webProjectInput = document.getElementById("web-project-file-input");
+        if (webProjectInput) {
+            webProjectInput.addEventListener("change", async (ev) => {
+                const file = ev.target.files && ev.target.files[0];
+                if (!file) return;
+                try {
+                    const text = await file.text();
+                    const res = await apiFetch("/api/files/open-project", {
+                        method: "POST",
+                        body: JSON.stringify({ bundle_content: text }),
+                    });
+                    await applyImportedProjectResult(res);
+                } catch (err) {
+                    showToast(err.message);
+                } finally {
+                    webProjectInput.value = "";
+                }
+            });
+        }
+
+        const btnOpenProject = document.getElementById("btn-open-project");
+        if (btnOpenProject) {
+            btnOpenProject.addEventListener("click", async () => {
+                try {
+                    const res = await apiFetch("/api/files/open-project", {
+                        method: "POST",
+                        body: JSON.stringify({}),
+                    });
+                    if (res.requires_web_upload && webProjectInput) {
+                        webProjectInput.click();
+                        return;
+                    }
+                    await applyImportedProjectResult(res);
                 } catch (err) {
                     showToast(err.message);
                 }

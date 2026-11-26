@@ -127,6 +127,27 @@ class TutorController {
             return;
         }
 
+        if (selection.type === "view" && selection.data) {
+            const vw = selection.data;
+            if (this.isTutorMode && this.bannerTitle && this.bannerText) {
+                this.bannerTitle.textContent = `Modo Tutor · Vista Virtual '${vw.name}' (VIEW)`;
+                this.bannerText.textContent = vw.tutor_explanation || vw.description;
+            }
+            this.lessonContainer.innerHTML = `
+                <div class="inspector-card">
+                    <h3 class="sidebar-heading">Vista '${this._escape(vw.name)}' (CREATE VIEW)</h3>
+                    <p class="sidebar-helper-text">${this._escape(
+                        vw.tutor_explanation || "Una vista almacena una consulta SELECT con nombre propio, sin duplicar datos en disco."
+                    )}</p>
+                    <div class="tutor-micro-lesson">
+                        <strong>Definición SQL virtual:</strong>
+                        <pre class="ddl-code-preview">${this._escape(vw.select_sql)}</pre>
+                    </div>
+                </div>
+            `;
+            return;
+        }
+
         if (selection.type === "relation" && selection.data) {
             const rel = selection.data;
             if (this.isTutorMode && this.bannerTitle && this.bannerText) {
@@ -162,9 +183,33 @@ class TutorController {
             return;
         }
 
-        this.logicalStepsContainer.innerHTML = breakdown.steps
-            .map(
-                (step) => `
+        const algebra = breakdown.relational_algebra;
+        const algebraHtml = algebra && algebra.expression
+            ? `
+                <div class="algebra-formula-box">
+                    <div class="logical-step-top">
+                        <span class="step-order-badge" style="background:var(--accent-indigo-tint); color:var(--accent-indigo); border-color:var(--accent-indigo);">Álgebra Relacional Equivalente</span>
+                    </div>
+                    <code class="algebra-expr-code">${this._escape(algebra.expression)}</code>
+                    ${
+                        algebra.operators && algebra.operators.length > 0
+                            ? `<div class="algebra-ops-list">${algebra.operators
+                                  .map(
+                                      (op) =>
+                                          `<span class="algebra-op-chip" title="${this._escape(op.detail)}"><strong>${this._escape(op.symbol)}</strong></span>`
+                                  )
+                                  .join(" ")}</div>`
+                            : ""
+                    }
+                </div>
+            `
+            : "";
+
+        this.logicalStepsContainer.innerHTML =
+            algebraHtml +
+            breakdown.steps
+                .map(
+                    (step) => `
                 <div class="logical-step-card">
                     <div class="logical-step-top">
                         <span class="step-order-badge">Paso ${step.order} · ${this._escape(step.clause)}</span>
@@ -173,8 +218,8 @@ class TutorController {
                     <p class="step-desc">${this._escape(step.explanation)}</p>
                 </div>
             `
-            )
-            .join("");
+                )
+                .join("");
 
         const viz = breakdown.join_visualizer;
         if (!viz) {

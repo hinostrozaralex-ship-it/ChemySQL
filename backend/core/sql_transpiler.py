@@ -13,6 +13,7 @@ from backend.core.schema_model import (
     MasterSchemaContract,
     RelationModel,
     TableModel,
+    ViewModel,
 )
 
 
@@ -197,18 +198,35 @@ class SQLTranspiler:
         self,
         contract: MasterSchemaContract,
         dialect: Optional[Literal["sqlite", "mysql", "postgresql", "sqlserver"]] = None,
+        force_idempotent: bool = False,
     ) -> Dict[str, Any]:
         target_dialect = dialect or contract.dialect or "sqlite"
+        use_idempotent = bool(force_idempotent or getattr(contract, "ddl_style", "standard") == "idempotent")
         ordered_tables = self._topological_sort_tables(contract.tables, contract.relations)
         rel_map: Dict[Tuple[str, str], RelationModel] = {
             (r.source_table, r.source_column): r for r in contract.relations
         }
+        unsafe_mssql_fks = (
+            self._find_mssql_unsafe_cascade_fks(contract.tables, contract.relations)
+            if target_dialect == "sqlserver"
+            else set()
+        )
+
+        db_ident_raw = (contract.ddl_identifier or "").strip()
+        if not db_ident_raw:
+            clean_title = (contract.title or "").strip()
+            if clean_title and re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", clean_title):
+                db_ident_raw = clean_title
+            else:
+                db_ident_raw = contract.db_name
+        db_q = quote_identifier(db_ident_raw, target_dialect, always=False)
 
         collation = contract.collation
+        style_tag = "IDEMPOTENTE (IF NOT EXISTS)" if use_idempotent else "ESTÁNDAR"
         header_lines = [
             "-- ============================================================================",
             f"-- ChemySQL DDL Transpilado | Proyecto: {contract.title} ({contract.db_name})",
-            f"-- Dialecto Destino: {target_dialect.upper()} | Versión de Esquema: v{contract.version}",
+            f"-- Dialecto Destino: {target_dialect.upper()} | Estilo: {style_tag} | Versión: v{contract.version}",
         ]
         if collation:
             header_lines.append(f"-- Cotejamiento (Collation): {collation}")
@@ -219,42 +237,79 @@ class SQLTranspiler:
             preamble_stmts.append("PRAGMA foreign_keys = ON;")
         elif target_dialect == "mysql":
             mysql_coll = self._resolve_collation(collation, "mysql")
-            preamble_stmts.append(
-                f"CREATE DATABASE IF NOT EXISTS {contract.db_name} CHARACTER SET utf8mb4 COLLATE {mysql_coll};"
-            )
-            preamble_stmts.append(f"USE {contract.db_name};")
-            preamble_stmts.append("SET FOREIGN_KEY_CHECKS = 1;")
+            if use_idempotent:
+                preamble_stmts.append(
+                    f"CREATE DATABASE IF NOT EXISTS {db_q} CHARACTER SET utf8mb4 COLLATE {mysql_coll};"
+                )
+                preamble_stmts.append(f"USE {db_q};")
+                preamble_stmts.append("SET FOREIGN_KEY_CHECKS = 1;")
+            else:
+                preamble_stmts.append(
+                    f"CREATE DATABASE {db_q} CHARACTER SET utf8mb4 COLLATE {mysql_coll};"
+                )
+                preamble_stmts.append(f"USE {db_q};")
         elif target_dialect == "sqlserver":
             mssql_coll = self._resolve_collation(collation, "sqlserver")
-            preamble_stmts.append(
-                f"CREATE DATABASE {contract.db_name} COLLATE {mssql_coll};\nGO"
-            )
-            preamble_stmts.append(f"USE {contract.db_name};\nGO")
+            escaped_db_lit = db_ident_raw.replace("'", "''")
+            if use_idempotent:
+                preamble_stmts.append(
+                    f"IF DB_ID(N'{escaped_db_lit}') IS NULL\n    CREATE DATABASE {db_q} COLLATE {mssql_coll};\nGO"
+                )
+            else:
+                preamble_stmts.append(
+                    f"CREATE DATABASE {db_q} COLLATE {mssql_coll};\nGO"
+                )
+            preamble_stmts.append(f"USE {db_q};\nGO")
         elif target_dialect == "postgresql":
-            preamble_stmts.append(f"-- Ejecutar conectado a la base de datos '{contract.db_name}'")
+            pg_lines = [
+                f"-- Ejecutar conectado a la base de datos {db_q} (UTF-8)",
+                "SET client_encoding = 'UTF8';",
+            ]
+            preamble_stmts.append("\n".join(pg_lines))
 
         statements: List[str] = []
         for tbl in ordered_tables:
-            create_stmt = self._build_create_table(tbl, rel_map, target_dialect, collation)
+            create_stmt = self._build_create_table(
+                tbl,
+                rel_map,
+                target_dialect,
+                collation,
+                use_idempotent=use_idempotent,
+                unsafe_mssql_fks=unsafe_mssql_fks,
+            )
             statements.append(create_stmt)
 
             tbl_q = quote_identifier(tbl.name, target_dialect, always=False)
             for idx_col in tbl.indexes:
                 if any(c.name == idx_col for c in tbl.columns):
-                    idx_name = quote_identifier(f"idx_{tbl.name}_{idx_col}", target_dialect, always=False)
+                    raw_idx_name = f"idx_{tbl.name}_{idx_col}"
+                    idx_name = quote_identifier(raw_idx_name, target_dialect, always=False)
                     col_q = quote_identifier(idx_col, target_dialect, always=False)
-                    if target_dialect in ("sqlite", "postgresql"):
+                    if target_dialect in ("sqlite", "postgresql") and use_idempotent:
                         statements.append(
                             f"CREATE INDEX IF NOT EXISTS {idx_name} ON {tbl_q} ({col_q});"
                         )
                     elif target_dialect == "sqlserver":
-                        statements.append(
-                            f"CREATE INDEX {idx_name} ON {tbl_q} ({col_q});\nGO"
-                        )
+                        if use_idempotent:
+                            esc_idx = raw_idx_name.replace("'", "''")
+                            esc_tbl = tbl.name.replace("'", "''")
+                            statements.append(
+                                f"IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'{esc_idx}' AND object_id = OBJECT_ID(N'{esc_tbl}'))\n"
+                                f"    CREATE INDEX {idx_name} ON {tbl_q} ({col_q});\nGO"
+                            )
+                        else:
+                            statements.append(
+                                f"CREATE INDEX {idx_name} ON {tbl_q} ({col_q});\nGO"
+                            )
                     else:
                         statements.append(
                             f"CREATE INDEX {idx_name} ON {tbl_q} ({col_q});"
                         )
+
+        for vw in getattr(contract, "views", []) or []:
+            vw_stmt = self._build_create_view(vw, target_dialect, use_idempotent=use_idempotent)
+            if vw_stmt:
+                statements.append(vw_stmt)
 
         full_script = "\n\n".join(["\n".join(header_lines)] + preamble_stmts + statements)
         return {
@@ -263,6 +318,78 @@ class SQLTranspiler:
             "statements": statements,
             "table_order": [t.name for t in ordered_tables],
         }
+
+    def _build_create_view(
+        self,
+        view: ViewModel,
+        dialect: str,
+        use_idempotent: bool = False,
+    ) -> str:
+        sel = (view.select_sql or "").strip().rstrip(";")
+        if not sel:
+            return ""
+        v_q = quote_identifier(view.name, dialect, always=False)
+        desc = (view.description or "").strip()
+        comment = f"-- Vista: {view.name} — {desc}\n" if desc else ""
+        if dialect == "sqlite":
+            ine = "IF NOT EXISTS " if use_idempotent else ""
+            return f"{comment}CREATE VIEW {ine}{v_q} AS\n{sel};"
+        if dialect in ("mysql", "postgresql"):
+            or_rep = "OR REPLACE " if use_idempotent else ""
+            return f"{comment}CREATE {or_rep}VIEW {v_q} AS\n{sel};"
+        if dialect == "sqlserver":
+            or_alt = "OR ALTER " if use_idempotent else ""
+            return f"{comment}CREATE {or_alt}VIEW {v_q} AS\n{sel};\nGO"
+        return f"{comment}CREATE VIEW {v_q} AS\n{sel};"
+
+    def _find_mssql_unsafe_cascade_fks(
+        self,
+        tables: List[TableModel],
+        relations: List[RelationModel],
+    ) -> Set[Tuple[str, str]]:
+        """
+        Detecta claves foráneas que provocarían el error T-SQL 1785 en SQL Server
+        ('may cause cycles or multiple cascade paths'):
+        - FKs auto-referenciales (reflexivas)
+        - Tablas a las que convergen >= 2 rutas desde un mismo ancestro común.
+        """
+        unsafe: Set[Tuple[str, str]] = set()
+        parents_of: Dict[str, List[Tuple[str, str]]] = {}
+        for tbl in tables:
+            for col in tbl.columns:
+                if col.is_fk and col.fk_target_table:
+                    if tbl.name.lower() == col.fk_target_table.lower():
+                        unsafe.add((tbl.name, col.name))
+                    else:
+                        parents_of.setdefault(tbl.name, []).append((col.name, col.fk_target_table))
+
+        def all_ancestors(start_tbl: str) -> Set[str]:
+            seen: Set[str] = set()
+            stack = [p for _, p in parents_of.get(start_tbl, [])]
+            while stack:
+                cur_p = stack.pop()
+                if cur_p in seen:
+                    continue
+                seen.add(cur_p)
+                for _, gp in parents_of.get(cur_p, []):
+                    if gp not in seen:
+                        stack.append(gp)
+            return seen
+
+        for tbl_name, fk_list in parents_of.items():
+            if len(fk_list) < 2:
+                continue
+            reachable_per_fk: List[Tuple[str, Set[str]]] = []
+            for col_name, direct_parent in fk_list:
+                anc = {direct_parent} | all_ancestors(direct_parent)
+                reachable_per_fk.append((col_name, anc))
+            seen_ancestors: Set[str] = set()
+            for col_name, anc_set in reachable_per_fk:
+                if seen_ancestors & anc_set:
+                    unsafe.add((tbl_name, col_name))
+                seen_ancestors |= anc_set
+
+        return unsafe
 
     def _resolve_collation(self, collation: Optional[str], dialect: str) -> str:
         raw = (collation or "").strip()
@@ -292,12 +419,15 @@ class SQLTranspiler:
         rel_map: Dict[Tuple[str, str], RelationModel],
         dialect: str,
         collation: Optional[str],
+        use_idempotent: bool = False,
+        unsafe_mssql_fks: Optional[Set[Tuple[str, str]]] = None,
     ) -> str:
         pk_cols = self._get_table_pk_columns(table)
         is_composite_pk = len(pk_cols) > 1
 
         col_defs: List[str] = []
         constraints: List[str] = []
+        notes: List[str] = []
 
         for col in table.columns:
             col_defs.append(
@@ -323,9 +453,15 @@ class SQLTranspiler:
                 tgt_tbl_q = quote_identifier(col.fk_target_table, dialect, always=False)
                 tgt_col_q = quote_identifier(target_col, dialect, always=False)
                 if dialect == "sqlserver":
-                    # SQL Server usa NO ACTION en lugar de RESTRICT
                     mssql_del = "NO ACTION" if on_del == "RESTRICT" else on_del
                     mssql_upd = "NO ACTION" if on_upd == "RESTRICT" else on_upd
+                    if unsafe_mssql_fks and (table.name, col.name) in unsafe_mssql_fks:
+                        if mssql_del != "NO ACTION" or mssql_upd != "NO ACTION":
+                            notes.append(
+                                f"-- [T-SQL] FK '{table.name}.{col.name}' ajustada a NO ACTION para evitar ciclos o múltiples rutas de cascada"
+                            )
+                            mssql_del = "NO ACTION"
+                            mssql_upd = "NO ACTION"
                     constraints.append(
                         f"    CONSTRAINT FK_{table.name}_{col.name} FOREIGN KEY ({col_q}) "
                         f"REFERENCES {tgt_tbl_q}({tgt_col_q}) "
@@ -340,16 +476,29 @@ class SQLTranspiler:
 
         all_lines = col_defs + constraints
         body = ",\n".join(all_lines)
-        comment = f"-- Tabla: {table.name} — {table.description}\n" if table.description else ""
+        desc_clean = (table.description or "").strip()
+        show_comment = bool(desc_clean) and not desc_clean.endswith("sincronizada desde código DDL")
+        comment_lines: List[str] = []
+        if show_comment:
+            comment_lines.append(f"-- Tabla: {table.name} — {desc_clean}")
+        comment_lines.extend(notes)
+        comment = ("\n".join(comment_lines) + "\n") if comment_lines else ""
         tbl_q = quote_identifier(table.name, dialect, always=False)
+        if_not_exists = "IF NOT EXISTS " if use_idempotent else ""
 
         if dialect == "mysql":
             mysql_coll = self._resolve_collation(collation, "mysql")
             suffix = f" ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE={mysql_coll};"
-            return f"{comment}CREATE TABLE IF NOT EXISTS {tbl_q} (\n{body}\n){suffix}"
+            return f"{comment}CREATE TABLE {if_not_exists}{tbl_q} (\n{body}\n){suffix}"
         if dialect == "sqlserver":
+            if use_idempotent:
+                esc_tbl = table.name.replace("'", "''")
+                return (
+                    f"{comment}IF OBJECT_ID(N'{esc_tbl}', N'U') IS NULL\n"
+                    f"CREATE TABLE {tbl_q} (\n{body}\n);\nGO"
+                )
             return f"{comment}CREATE TABLE {tbl_q} (\n{body}\n);\nGO"
-        return f"{comment}CREATE TABLE IF NOT EXISTS {tbl_q} (\n{body}\n);"
+        return f"{comment}CREATE TABLE {if_not_exists}{tbl_q} (\n{body}\n);"
 
     def _format_column_def(
         self,
@@ -364,7 +513,8 @@ class SQLTranspiler:
             expr = col.computed_expression.strip()
             sql_type = self._map_type_for_dialect(col.data_type, col.length, dialect)
             if dialect == "sqlserver":
-                return f"    {col_q} AS ({expr})"
+                persisted = " PERSISTED" if col.computed_storage == "STORED" else ""
+                return f"    {col_q} AS ({expr}){persisted}"
             if dialect == "postgresql":
                 return f"    {col_q} {sql_type} GENERATED ALWAYS AS ({expr}) STORED"
             storage = col.computed_storage or "VIRTUAL"
@@ -419,12 +569,19 @@ class SQLTranspiler:
                 if col.data_type.upper() == "BOOLEAN":
                     if dialect == "postgresql":
                         def_val = "TRUE" if upper_def in ("1", "TRUE") else "FALSE"
-                    elif dialect in ("sqlite", "sqlserver") and upper_def in ("TRUE", "FALSE"):
+                    elif dialect in ("sqlite", "sqlserver", "mysql") and upper_def in ("TRUE", "FALSE"):
                         def_val = "1" if upper_def == "TRUE" else "0"
+                elif dialect == "sqlserver" and upper_def == "CURRENT_DATE":
+                    def_val = "CAST(GETDATE() AS DATE)"
+                elif dialect in ("postgresql", "sqlite") and upper_def == "GETDATE()":
+                    def_val = "CURRENT_TIMESTAMP"
                 parts.append(f"DEFAULT {def_val}")
             else:
                 clean_str = def_val.strip("'\"").replace("'", "''")
-                parts.append(f"DEFAULT '{clean_str}'")
+                if dialect == "mysql" and sql_type.upper() == "TEXT":
+                    parts.append(f"DEFAULT ('{clean_str}')")
+                else:
+                    parts.append(f"DEFAULT '{clean_str}'")
 
         if col.check_constraint:
             chk = col.check_constraint.strip()
@@ -450,6 +607,14 @@ class SQLTranspiler:
             if dialect == "postgresql":
                 return "SMALLINT"
             return "TINYINT"
+        if ut == "FLOAT":
+            if dialect == "postgresql":
+                return "DOUBLE PRECISION"
+            return "FLOAT"
+        if ut == "TEXT":
+            if dialect == "sqlserver":
+                return "NVARCHAR(MAX)"
+            return "TEXT"
         if ut == "DATETIME":
             if dialect == "postgresql":
                 return "TIMESTAMP"
@@ -565,11 +730,15 @@ class SQLTranspiler:
         - DROP TABLE en orden topológico inverso para tablas eliminadas
         """
         if not old_contract:
-            ddl_info = self.transpile_ddl(new_contract, "sqlite")
+            ddl_info = self.transpile_ddl(new_contract, "sqlite", force_idempotent=True)
             return {
                 "summary": f"Despliegue inicial del esquema con {len(new_contract.tables)} tablas.",
                 "alter_statements": ddl_info["statements"],
                 "changes": [f"Creada tabla '{t.name}' ({len(t.columns)} columnas)" for t in new_contract.tables],
+                "dropped_tables": [],
+                "dropped_columns": [],
+                "rebuilt_tables": [],
+                "is_destructive": False,
             }
 
         old_tables = {t.name: t for t in old_contract.tables}
@@ -586,6 +755,9 @@ class SQLTranspiler:
 
         alter_statements: List[str] = []
         changes: List[str] = []
+        dropped_tables: List[str] = []
+        dropped_columns: List[Dict[str, str]] = []
+        rebuilt_tables: List[str] = []
 
         for new_tbl in ordered_new:
             t_name = new_tbl.name
@@ -603,8 +775,13 @@ class SQLTranspiler:
             else:
                 old_tbl = old_tables[t_name]
                 old_cols = {c.name: c for c in old_tbl.columns}
+                new_col_names = {c.name for c in new_tbl.columns}
+                for old_col_name in old_cols:
+                    if old_col_name not in new_col_names:
+                        dropped_columns.append({"table": t_name, "column": old_col_name})
 
                 if self._table_needs_rebuild(old_tbl, new_tbl, old_rel_map, new_rel_map):
+                    rebuilt_tables.append(t_name)
                     tmp_name = f"__chemysql_tmp_{t_name}"
                     tmp_q = quote_identifier(tmp_name, "sqlite")
                     tbl_q_strict = quote_identifier(t_name, "sqlite")
@@ -666,12 +843,35 @@ class SQLTranspiler:
                 old_q = quote_identifier(old_tbl.name, "sqlite", always=False)
                 alter_statements.append(f"DROP TABLE IF EXISTS {old_q};")
                 changes.append(f"Tabla eliminada: '{old_tbl.name}'")
+                dropped_tables.append(old_tbl.name)
+
+        old_views = {v.name: v for v in (getattr(old_contract, "views", []) or [])}
+        new_views = {v.name: v for v in (getattr(new_contract, "views", []) or [])}
+        for old_v_name in old_views:
+            if old_v_name not in new_views:
+                vq = quote_identifier(old_v_name, "sqlite", always=False)
+                alter_statements.append(f"DROP VIEW IF EXISTS {vq};")
+                changes.append(f"Vista eliminada: '{old_v_name}'")
+        for new_v_name, new_vw in new_views.items():
+            vq = quote_identifier(new_v_name, "sqlite", always=False)
+            clean_sel = new_vw.select_sql.strip().rstrip(";")
+            if new_v_name not in old_views:
+                alter_statements.append(f"CREATE VIEW IF NOT EXISTS {vq} AS {clean_sel};")
+                changes.append(f"Nueva vista creada: '{new_v_name}'")
+            elif old_views[new_v_name].select_sql.strip().rstrip(";") != clean_sel:
+                alter_statements.append(f"DROP VIEW IF EXISTS {vq};")
+                alter_statements.append(f"CREATE VIEW {vq} AS {clean_sel};")
+                changes.append(f"Vista actualizada: '{new_v_name}'")
 
         summary = "; ".join(changes) if changes else "Actualización de metadatos y políticas de relación."
         return {
             "summary": summary,
             "alter_statements": alter_statements,
             "changes": changes,
+            "dropped_tables": dropped_tables,
+            "dropped_columns": dropped_columns,
+            "rebuilt_tables": rebuilt_tables,
+            "is_destructive": bool(dropped_tables or dropped_columns),
         }
 
     def parse_ddl_to_contract(
@@ -683,33 +883,119 @@ class SQLTranspiler:
         Sincronización bidireccional (Código DDL -> Contrato Maestro JSON):
         Ejecuta el DDL editado por el usuario en una instancia SQLite en memoria (:memory:),
         extrae la estructura real (tablas, columnas, PK simples/compuestas, FK, UNIQUE, CHECK,
-        DEFAULT y columnas calculadas) y preserva las posiciones X/Y del Lienzo ER.
+        DEFAULT y columnas calculadas), lee CREATE DATABASE / USE / COLLATE, detecta si el usuario
+        prefiere estilo limpio o IF NOT EXISTS y preserva posiciones X/Y y metadatos semánticos.
         """
         import sqlite3
         from datetime import datetime
+        from backend.core.nlp_parser import to_snake_case
+
+        parsed_ddl_ident: Optional[str] = base_contract.ddl_identifier if base_contract else None
+        parsed_db_name: str = base_contract.db_name if base_contract else "esquema_ddl"
+        parsed_title: str = base_contract.title if base_contract else "Esquema Editado en DDL"
+        parsed_collation: Optional[str] = base_contract.collation if base_contract else None
+        saw_if_not_exists = False
+        saw_ddl_create = False
 
         # Normalizar sintaxis MySQL / SQL Server / PostgreSQL a SQLite para parseo determinista
         cleaned_stmts: List[str] = []
-        raw_text = re.sub(r"\bGO\b", ";", sql_text, flags=re.IGNORECASE)
+        raw_text = re.sub(r"^\s*GO\s*$", ";", sql_text, flags=re.IGNORECASE | re.MULTILINE)
         for chunk in split_sql_statements(raw_text):
-            no_comments = chunk.strip()
+            # Quitar líneas de comentario iniciales del bloque antes de clasificarlo
+            body_lines = []
+            for ln in chunk.splitlines():
+                if ln.strip().startswith("--"):
+                    continue
+                body_lines.append(ln)
+            no_comments = "\n".join(body_lines).strip()
             if not no_comments:
                 continue
             upper = no_comments.upper()
-            if upper.startswith(("CREATE DATABASE", "IF DB_ID", "USE ", "SET FOREIGN_KEY_CHECKS", "PRAGMA")):
+
+            # Capturar CREATE DATABASE [IF NOT EXISTS] <nombre> [... COLLATE <coll>]
+            m_cdb = re.match(
+                r"^(?:IF\s+DB_ID\s*\([^)]+\)\s+IS\s+NULL\s+)?CREATE\s+DATABASE\s+(IF\s+NOT\s+EXISTS\s+)?[`\"'\[]?([A-Za-z0-9_]+)[`\"'\]]?(.*)$",
+                no_comments,
+                flags=re.IGNORECASE | re.DOTALL,
+            )
+            if m_cdb:
+                saw_ddl_create = True
+                if m_cdb.group(1) or upper.startswith("IF DB_ID"):
+                    saw_if_not_exists = True
+                raw_ident = m_cdb.group(2).strip()
+                if raw_ident:
+                    parsed_ddl_ident = raw_ident
+                    parsed_db_name = to_snake_case(raw_ident) or parsed_db_name
+                    parsed_title = raw_ident.replace("_", " ") if "_" in raw_ident else raw_ident
+                m_coll = re.search(r"\bCOLLATE\s*=?\s*([A-Za-z0-9_]+)", m_cdb.group(3) or "", flags=re.IGNORECASE)
+                if m_coll:
+                    parsed_collation = m_coll.group(1)
                 continue
+
+            m_use = re.match(r"^USE\s+[`\"'\[]?([A-Za-z0-9_]+)[`\"'\]]?$", no_comments, flags=re.IGNORECASE)
+            if m_use:
+                raw_ident = m_use.group(1).strip()
+                if raw_ident and not parsed_ddl_ident:
+                    parsed_ddl_ident = raw_ident
+                    parsed_db_name = to_snake_case(raw_ident) or parsed_db_name
+                    parsed_title = raw_ident.replace("_", " ") if "_" in raw_ident else raw_ident
+                continue
+
+            if upper.startswith(("IF DB_ID", "SET FOREIGN_KEY_CHECKS", "SET CLIENT_ENCODING", "PRAGMA")):
+                continue
+
+            # Extraer COLLATE a nivel de tabla si no se había detectado aún
+            if not parsed_collation:
+                m_tbl_coll = re.search(r"\)\s*[^;]*?\bCOLLATE\s*=\s*([A-Za-z0-9_]+)", no_comments, flags=re.IGNORECASE)
+                if m_tbl_coll:
+                    parsed_collation = m_tbl_coll.group(1)
+
+            # Detectar IF OBJECT_ID(...) IS NULL CREATE TABLE ... de SQL Server
+            stmt = no_comments
+            if re.match(r"^IF\s+OBJECT_ID\s*\([^)]+\)\s+IS\s+NULL\s+CREATE\s+TABLE\b", stmt, flags=re.IGNORECASE):
+                saw_ddl_create = True
+                saw_if_not_exists = True
+                stmt = re.sub(r"^IF\s+OBJECT_ID\s*\([^)]+\)\s+IS\s+NULL\s+", "", stmt, flags=re.IGNORECASE)
+            elif re.match(r"^IF\s+NOT\s+EXISTS\s*\(\s*SELECT\b.+?\)\s*CREATE\s+INDEX\b", stmt, flags=re.IGNORECASE | re.DOTALL):
+                saw_if_not_exists = True
+                stmt = re.sub(r"^IF\s+NOT\s+EXISTS\s*\(\s*SELECT\b.+?\)\s*", "", stmt, flags=re.IGNORECASE | re.DOTALL)
+            elif upper.startswith("CREATE TABLE"):
+                saw_ddl_create = True
+                if re.match(r"^CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\b", stmt, flags=re.IGNORECASE):
+                    saw_if_not_exists = True
+            elif re.match(r"^CREATE\s+(?:OR\s+(?:REPLACE|ALTER)\s+)?VIEW\b", stmt, flags=re.IGNORECASE):
+                saw_ddl_create = True
+                if re.match(r"^CREATE\s+OR\s+(?:REPLACE|ALTER)\s+VIEW\b|^CREATE\s+VIEW\s+IF\s+NOT\s+EXISTS\b", stmt, flags=re.IGNORECASE):
+                    saw_if_not_exists = True
+                stmt = re.sub(
+                    r"^CREATE\s+OR\s+(?:REPLACE|ALTER)\s+VIEW\b",
+                    "CREATE VIEW IF NOT EXISTS",
+                    stmt,
+                    flags=re.IGNORECASE,
+                )
+
             # Adaptar sintaxis de otros dialectos
             stmt = re.sub(
                 r"\)\s*(?:ENGINE\s*=\s*\w+|DEFAULT\s+CHARSET\s*=\s*\w+|CHARACTER\s+SET\s+\w+|COLLATE\s*=?\s*\w+|AUTO_INCREMENT\s*=\s*\d+|\s)+$",
                 ")",
-                no_comments,
+                stmt,
                 flags=re.IGNORECASE,
             )
+            stmt = re.sub(r"\bNVARCHAR\s*\(\s*MAX\s*\)", "TEXT", stmt, flags=re.IGNORECASE)
+            stmt = re.sub(r"\bDOUBLE\s+PRECISION\b", "FLOAT", stmt, flags=re.IGNORECASE)
+            stmt = re.sub(r"\bDATETIME2\b", "DATETIME", stmt, flags=re.IGNORECASE)
+            stmt = re.sub(r"\bDEFAULT\s*\(\s*'([^']*)'\s*\)", r"DEFAULT '\1'", stmt, flags=re.IGNORECASE)
             stmt = re.sub(r"\bINT\s+IDENTITY\s*\(\s*\d+\s*,\s*\d+\s*\)\s+PRIMARY\s+KEY\b", "INTEGER PRIMARY KEY AUTOINCREMENT", stmt, flags=re.IGNORECASE)
             stmt = re.sub(r"\b(?:INT|INTEGER)\s+AUTO_INCREMENT\s+PRIMARY\s+KEY\b", "INTEGER PRIMARY KEY AUTOINCREMENT", stmt, flags=re.IGNORECASE)
             stmt = re.sub(r"\bSERIAL\s+PRIMARY\s+KEY\b", "INTEGER PRIMARY KEY AUTOINCREMENT", stmt, flags=re.IGNORECASE)
-            # SQL Server computed column: col AS (expr) -> col DECIMAL(10,2) GENERATED ALWAYS AS (expr) VIRTUAL (sin tocar GENERATED ALWAYS AS)
+            # SQL Server computed column: col AS (expr) [PERSISTED] -> col DECIMAL(10,2) GENERATED ALWAYS AS (expr) VIRTUAL/STORED
             if "GENERATED ALWAYS AS" not in stmt.upper():
+                stmt = re.sub(
+                    r"\b([a-zA-Z_][a-zA-Z0-9_]*)\s+AS\s*\(([^)]+)\)\s+PERSISTED\b",
+                    r"\1 DECIMAL(10,2) GENERATED ALWAYS AS (\2) STORED",
+                    stmt,
+                    flags=re.IGNORECASE,
+                )
                 stmt = re.sub(
                     r"\b([a-zA-Z_][a-zA-Z0-9_]*)\s+AS\s*\(([^)]+)\)",
                     r"\1 DECIMAL(10,2) GENERATED ALWAYS AS (\2) VIRTUAL",
@@ -718,10 +1004,21 @@ class SQLTranspiler:
                 )
             cleaned_stmts.append(stmt)
 
-        old_positions: Dict[str, Tuple[float, float]] = {}
+        old_tables_by_low: Dict[str, TableModel] = {}
+        old_views_by_low: Dict[str, ViewModel] = {}
+        old_rels_by_pair: Dict[Tuple[str, str], RelationModel] = {}
         if base_contract:
             for t in base_contract.tables:
-                old_positions[t.name.lower()] = (t.position_x, t.position_y)
+                old_tables_by_low[t.name.lower()] = t
+            for v in getattr(base_contract, "views", []) or []:
+                old_views_by_low[v.name.lower()] = v
+            for r in base_contract.relations:
+                old_rels_by_pair[(r.source_table.lower(), r.source_column.lower())] = r
+
+        if saw_ddl_create:
+            parsed_style: Literal["standard", "idempotent"] = "idempotent" if saw_if_not_exists else "standard"
+        else:
+            parsed_style = base_contract.ddl_style if base_contract else "standard"
 
         # Extraer expresiones GENERATED ALWAYS AS y CHECK por (tabla, columna) sin colisiones
         computed_by_col, check_by_col = extract_table_column_constraints(sql_text)
@@ -742,30 +1039,12 @@ class SQLTranspiler:
             relations: List[RelationModel] = []
 
             for idx, t_name in enumerate(table_names):
-                t_q = quote_identifier(t_name, "sqlite")
-                cur.execute(f"PRAGMA foreign_key_list({t_q})")
-                fk_by_col: Dict[str, Dict[str, str]] = {}
-                for fk in cur.fetchall():
-                    fk_by_col[fk[3]] = {
-                        "target_table": fk[2],
-                        "target_column": fk[4] or "id",
-                        "on_update": fk[5] or "CASCADE",
-                        "on_delete": fk[6] or "RESTRICT",
-                    }
-                    relations.append(
-                        RelationModel(
-                            id=f"rel_{t_name}_{fk[3]}_{fk[2]}",
-                            source_table=t_name,
-                            source_column=fk[3],
-                            target_table=fk[2],
-                            target_column=fk[4] or "id",
-                            cardinality="1:N",
-                            on_delete=fk[6] if fk[6] in ("RESTRICT", "CASCADE", "SET NULL", "NO ACTION") else "RESTRICT",  # type: ignore[arg-type]
-                            on_update=fk[5] if fk[5] in ("RESTRICT", "CASCADE", "SET NULL", "NO ACTION") else "CASCADE",  # type: ignore[arg-type]
-                            tutor_explanation=f"Relación referencial entre {t_name}.{fk[3]} y {fk[2]}.{fk[4] or 'id'}.",
-                        )
-                    )
+                old_tbl = old_tables_by_low.get(t_name.lower())
+                old_cols_by_low: Dict[str, ColumnModel] = (
+                    {c.name.lower(): c for c in old_tbl.columns} if old_tbl else {}
+                )
 
+                t_q = quote_identifier(t_name, "sqlite")
                 cur.execute(f"PRAGMA index_list({t_q})")
                 unique_cols: Set[str] = set()
                 explicit_indexes: List[str] = []
@@ -780,6 +1059,46 @@ class SQLTranspiler:
                             unique_cols.add(idx_cols[0])
                         if not idx_name.startswith("sqlite_autoindex"):
                             explicit_indexes.append(idx_cols[0])
+
+                cur.execute(f"PRAGMA foreign_key_list({t_q})")
+                fk_by_col: Dict[str, Dict[str, str]] = {}
+                for fk in cur.fetchall():
+                    src_col_name = fk[3]
+                    tgt_tbl_name = fk[2]
+                    tgt_col_name = fk[4] or "id"
+                    fk_by_col[src_col_name] = {
+                        "target_table": tgt_tbl_name,
+                        "target_column": tgt_col_name,
+                        "on_update": fk[5] or "CASCADE",
+                        "on_delete": fk[6] or "RESTRICT",
+                    }
+                    prev_rel = old_rels_by_pair.get((t_name.lower(), src_col_name.lower()))
+                    inferred_card: Literal["1:1", "1:N", "N:M"] = "1:N"
+                    if prev_rel and prev_rel.target_table.lower() == tgt_tbl_name.lower():
+                        inferred_card = prev_rel.cardinality
+                    elif src_col_name in unique_cols:
+                        inferred_card = "1:1"
+                    elif old_tbl and old_tbl.is_associative:
+                        inferred_card = "N:M"
+
+                    relations.append(
+                        RelationModel(
+                            id=prev_rel.id if prev_rel else f"rel_{t_name}_{src_col_name}_{tgt_tbl_name}",
+                            source_table=t_name,
+                            source_column=src_col_name,
+                            target_table=tgt_tbl_name,
+                            target_column=tgt_col_name,
+                            cardinality=inferred_card,
+                            on_delete=fk[6] if fk[6] in ("RESTRICT", "CASCADE", "SET NULL", "NO ACTION") else "RESTRICT",  # type: ignore[arg-type]
+                            on_update=fk[5] if fk[5] in ("RESTRICT", "CASCADE", "SET NULL", "NO ACTION") else "CASCADE",  # type: ignore[arg-type]
+                            via_table=prev_rel.via_table if prev_rel else (t_name if (old_tbl and old_tbl.is_associative) else None),
+                            tutor_explanation=(
+                                prev_rel.tutor_explanation
+                                if (prev_rel and prev_rel.tutor_explanation)
+                                else f"Relación referencial entre {t_name}.{src_col_name} y {tgt_tbl_name}.{tgt_col_name}."
+                            ),
+                        )
+                    )
 
                 cur.execute(f"PRAGMA table_xinfo({t_q})")
                 cols: List[ColumnModel] = []
@@ -802,10 +1121,13 @@ class SQLTranspiler:
                     if m_len:
                         c_type = m_len.group(1).upper()
                         c_len = int(m_len.group(2))
+                    elif raw_type.strip().upper() == "BIT":
+                        c_type = "BOOLEAN"
 
                     fk_info = fk_by_col.get(c_name)
                     col_key = (t_name.lower(), c_name.lower())
                     comp_expr = computed_by_col.get(col_key) if c_hidden in (2, 3) else None
+                    old_col = old_cols_by_low.get(c_name.lower())
 
                     cols.append(
                         ColumnModel(
@@ -823,44 +1145,101 @@ class SQLTranspiler:
                             computed_storage="STORED" if c_hidden == 3 else "VIRTUAL",
                             fk_target_table=fk_info["target_table"] if fk_info else None,
                             fk_target_column=fk_info["target_column"] if fk_info else None,
-                            description=f"Columna {c_name} editada desde código DDL",
-                            tutor_explanation=f"Columna '{c_name}' ({raw_type}) sincronizada desde el código DDL.",
+                            description=(
+                                old_col.description
+                                if (old_col and old_col.description and "editada desde código DDL" not in old_col.description)
+                                else f"Atributo '{c_name}' de {t_name}"
+                            ),
+                            tutor_explanation=(
+                                old_col.tutor_explanation
+                                if (old_col and old_col.tutor_explanation)
+                                else f"Columna '{c_name}' ({raw_type}) sincronizada desde el código DDL."
+                            ),
                         )
                     )
 
                 pk_pairs.sort(key=lambda x: x[0])
                 pk_list = [name for _, name in pk_pairs]
-                pos_x, pos_y = old_positions.get(
-                    t_name.lower(), (20.0 + (idx % 3) * 324.0, 20.0 + (idx // 3) * 288.0)
+                pos_x, pos_y = (
+                    (old_tbl.position_x, old_tbl.position_y)
+                    if old_tbl
+                    else (20.0 + (idx % 3) * 324.0, 20.0 + (idx // 3) * 288.0)
+                )
+                preserved_desc = (
+                    old_tbl.description
+                    if (old_tbl and old_tbl.description and not old_tbl.description.endswith("sincronizada desde código DDL"))
+                    else ""
                 )
 
                 tables.append(
                     TableModel(
                         name=t_name,
-                        description=f"Tabla {t_name} sincronizada desde código DDL",
+                        description=preserved_desc,
+                        is_associative=old_tbl.is_associative if old_tbl else False,
+                        is_historical=old_tbl.is_historical if old_tbl else False,
                         position_x=pos_x,
                         position_y=pos_y,
                         primary_key=pk_list,
                         columns=cols,
                         indexes=explicit_indexes,
-                        tutor_explanation=f"Tabla '{t_name}' actualizada directamente desde el editor DDL.",
+                        functional_dependencies=list(old_tbl.functional_dependencies) if old_tbl else [],
+                        tutor_explanation=(
+                            old_tbl.tutor_explanation
+                            if (old_tbl and old_tbl.tutor_explanation)
+                            else f"Tabla '{t_name}' definida en el esquema relacional."
+                        ),
+                    )
+                )
+
+            cur.execute(
+                "SELECT name, sql FROM sqlite_master WHERE type='view' AND name NOT LIKE 'sqlite_%'"
+            )
+            view_rows = cur.fetchall()
+            views: List[ViewModel] = []
+            for v_idx, (v_name, v_sql) in enumerate(view_rows):
+                old_vw = old_views_by_low.get(v_name.lower())
+                m_as = re.search(r"\bAS\b\s+(.+)$", v_sql or "", flags=re.IGNORECASE | re.DOTALL)
+                sel_sql = m_as.group(1).strip().rstrip(";") if m_as else (v_sql or "")
+                v_cols: List[str] = []
+                try:
+                    cur.execute(f"PRAGMA table_info({quote_identifier(v_name, 'sqlite')})")
+                    v_cols = [r[1] for r in cur.fetchall() if r[1]]
+                except sqlite3.Error:
+                    pass
+                vx, vy = (
+                    (old_vw.position_x, old_vw.position_y)
+                    if old_vw
+                    else (60.0 + (v_idx % 3) * 320.0, 420.0 + (v_idx // 3) * 200.0)
+                )
+                views.append(
+                    ViewModel(
+                        name=v_name,
+                        select_sql=sel_sql,
+                        columns=v_cols,
+                        description=old_vw.description if old_vw else "",
+                        position_x=vx,
+                        position_y=vy,
                     )
                 )
         finally:
             conn.close()
 
         return MasterSchemaContract(
-            db_name=base_contract.db_name if base_contract else "esquema_ddl",
-            title=base_contract.title if base_contract else "Esquema Editado en DDL",
+            db_name=parsed_db_name,
+            ddl_identifier=parsed_ddl_ident,
+            ddl_style=parsed_style,
+            title=parsed_title,
             description=base_contract.description if base_contract else "",
             source_prompt=base_contract.source_prompt if base_contract else "",
             dialect=base_contract.dialect if base_contract else "sqlite",
-            collation=base_contract.collation if base_contract else None,
+            collation=parsed_collation,
             is_deployed=False,
             version=base_contract.version if base_contract else 1,
             updated_at=datetime.now().isoformat(timespec="seconds"),
             tables=tables,
+            views=views,
             relations=relations,
             audit_alerts=[],
             tutor_metadata=base_contract.tutor_metadata if base_contract else {},
+            diagram_layout=base_contract.diagram_layout if base_contract else {},
         )

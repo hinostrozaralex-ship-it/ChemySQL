@@ -356,7 +356,7 @@ class SQLCodeEditorController {
             const prefixLow = wordMatch[1].toLowerCase();
             this.currentTokenRange = { start: pos - wordMatch[1].length, end: pos };
 
-            // 1. Tablas del esquema activo
+            // 1. Tablas y vistas del esquema activo
             tables.forEach((t) => {
                 if (t.name.toLowerCase().startsWith(prefixLow)) {
                     candidates.push({
@@ -364,6 +364,16 @@ class SQLCodeEditorController {
                         insert: t.name,
                         kind: "TABLA",
                         detail: `${(t.columns || []).length} cols`,
+                    });
+                }
+            });
+            ((contract && contract.views) || []).forEach((vw) => {
+                if (vw.name.toLowerCase().startsWith(prefixLow)) {
+                    candidates.push({
+                        label: vw.name,
+                        insert: vw.name,
+                        kind: "VIEW",
+                        detail: "Vista virtual",
                     });
                 }
             });
