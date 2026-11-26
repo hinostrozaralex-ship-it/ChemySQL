@@ -21,6 +21,7 @@ class SQLCodeEditorController {
         this.activeIndex = 0;
         this.currentTokenRange = { start: 0, end: 0 };
         this.ghostText = "";
+        this.errorLine = null;
 
         this.SQL_KEYWORDS = [
             "SELECT", "FROM", "WHERE", "INNER JOIN", "LEFT JOIN", "RIGHT JOIN", "JOIN", "ON",
@@ -80,6 +81,7 @@ class SQLCodeEditorController {
 
     _bindEvents() {
         this.textarea.addEventListener("input", () => {
+            this.errorLine = null;
             this.refreshHighlight();
             this._keepActiveLineCentered();
             this.onChange(this.textarea.value);
@@ -137,6 +139,19 @@ class SQLCodeEditorController {
             }
         }
         return { text: full.trim(), isSelection: false, startLineOffset: 0 };
+    }
+
+    setErrorLine(lineNumber) {
+        const n = Number(lineNumber);
+        this.errorLine = Number.isFinite(n) && n >= 1 ? Math.round(n) : null;
+        this.refreshHighlight();
+    }
+
+    clearErrorLine() {
+        if (this.errorLine !== null) {
+            this.errorLine = null;
+            this.refreshHighlight();
+        }
     }
 
     jumpToLine(lineNumber) {
@@ -718,18 +733,34 @@ class SQLCodeEditorController {
         const lineCount = Math.max(1, displayCode.split("\n").length);
         let gutterHtml = "";
         for (let i = 1; i <= lineCount; i++) {
-            gutterHtml += `<div>${i}</div>`;
+            if (this.errorLine === i) {
+                gutterHtml += `<div class="gutter-error-line" title="Error SQL en línea ${i}">● ${i}</div>`;
+            } else {
+                gutterHtml += `<div>${i}</div>`;
+            }
         }
         this.gutter.innerHTML = gutterHtml;
 
+        let highlighted = "";
         if (this.ghostText) {
             const beforeHtml = this._highlightSQL(code.slice(0, pos));
             const ghostHtml = `<span class="hl-ghost">${this._escape(this.ghostText)}</span>`;
             const afterHtml = this._highlightSQL(code.slice(pos));
-            this.highlightLayer.innerHTML = beforeHtml + ghostHtml + afterHtml + "\n";
+            highlighted = beforeHtml + ghostHtml + afterHtml;
         } else {
-            this.highlightLayer.innerHTML = this._highlightSQL(code) + "\n";
+            highlighted = this._highlightSQL(code);
         }
+
+        if (this.errorLine && this.errorLine >= 1) {
+            const htmlLines = highlighted.split("\n");
+            const errIdx = this.errorLine - 1;
+            if (errIdx >= 0 && errIdx < htmlLines.length) {
+                htmlLines[errIdx] = `<span class="hl-error-line">${htmlLines[errIdx] || " "}</span>`;
+            }
+            highlighted = htmlLines.join("\n");
+        }
+
+        this.highlightLayer.innerHTML = highlighted + "\n";
         this._syncScroll();
     }
 

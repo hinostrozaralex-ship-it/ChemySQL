@@ -311,6 +311,43 @@ class TestAPISecurity(unittest.TestCase):
         self.assertIn("pedidos", ent_names)
         self.assertIn("productos", ent_names)
 
+    def test_advanced_auditor_score_security_antipatterns_and_fix_all(self) -> None:
+        aud = ProactiveAuditor()
+        nlp = SpanishNLPParser()
+        contract = nlp.parse_text_to_schema(
+            """
+            Tabla user:
+            id: tipo INT, NOT NULL, PRIMARY KEY.
+            email: tipo VARCHAR(80), NOT NULL.
+            password: tipo VARCHAR(20), NOT NULL.
+            salario: tipo DECIMAL(8,2), NOT NULL.
+            """,
+            db_name="audit_pro_test",
+        )
+        alerts = aud.audit_schema(contract)
+        cats = {a.category for a in alerts}
+        self.assertIn("seguridad", cats)
+        self.assertIn("integridad_dominio", cats)
+        self.assertIn("portabilidad", cats)
+        summary = contract.tutor_metadata.get("audit_summary", {})
+        self.assertLess(summary.get("score", 100), 100)
+        self.assertGreater(summary.get("safe_fixable", 0), 0)
+
+        fixed_contract, count, _ = aud.apply_all_safe_fixes(contract)
+        self.assertGreaterEqual(count, 3)
+        new_score = fixed_contract.tutor_metadata["audit_summary"]["score"]
+        self.assertGreater(new_score, summary["score"])
+
+        # Anti-patrones SQL
+        recs = aud.analyze_query_plan(
+            "SELECT * FROM clientes JOIN pedidos WHERE LOWER(email) LIKE '%gmail.com'",
+            [],
+        )
+        msgs = " ".join(r["message"] for r in recs)
+        self.assertIn("producto cartesiano", msgs)
+        self.assertIn("LIKE '%texto%'", msgs)
+        self.assertIn("SARGable", msgs)
+
 
 if __name__ == "__main__":
     unittest.main()

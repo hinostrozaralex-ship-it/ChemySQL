@@ -379,6 +379,22 @@ def audit_and_transpile_schema(contract: MasterSchemaContract) -> Dict[str, Any]
         raise HTTPException(status_code=400, detail=f"Error en auditoría del esquema: {exc}") from exc
 
 
+@router.post("/schema/audit/fix-all")
+def apply_all_safe_audit_fixes(contract: MasterSchemaContract) -> Dict[str, Any]:
+    """Aplica en un clic todas las correcciones seguras no destructivas del Auditor."""
+    try:
+        updated_contract, count, details = engine.auditor.apply_all_safe_fixes(contract)
+        return {
+            "fixed_count": count,
+            "details": details,
+            "summary": f"Se aplicaron {count} corrección(es) automática(s) seguras al esquema.",
+            "schema_contract": updated_contract.model_dump(),
+            "ddl_previews": _build_ddl_previews(updated_contract),
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Error al aplicar correcciones automáticas: {exc}") from exc
+
+
 @router.post("/schema/parse-ddl")
 def parse_edited_ddl_to_schema(payload: ParseDDLRequest) -> Dict[str, Any]:
     """Convierte código DDL editado manualmente por el usuario de vuelta al Contrato Maestro JSON y Lienzo ER."""

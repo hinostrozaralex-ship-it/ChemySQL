@@ -472,85 +472,240 @@ import { SchemaUndoManager } from "./modules/undo_manager.js";
     /* ======================================================================
        Panel Derecho: Auditor Proactivo, Inspector y DDL Multi-Dialecto
        ====================================================================== */
+    let activeAuditFilter = "all";
+
+    function exportAuditReportMarkdown() {
+        if (!state.contract) return;
+        const c = state.contract;
+        const alerts = c.audit_alerts || [];
+        const summary = (c.tutor_metadata && c.tutor_metadata.audit_summary) || {
+            score: Math.max(0, 100 - alerts.length * 5),
+            grade: alerts.length === 0 ? "A+" : "B",
+            critical: alerts.filter((a) => a.severity === "critical").length,
+            warning: alerts.filter((a) => a.severity === "warning").length,
+            info: alerts.filter((a) => a.severity === "info").length,
+        };
+        const lines = [
+            `# Informe de Auditoría Técnica · ChemySQL`,
+            ``,
+            `- **Proyecto:** ${c.title || c.db_name} (\`${c.db_name}.db\`)`,
+            `- **Versión de Esquema:** v${c.version || 1}`,
+            `- **Fecha:** ${new Date().toISOString().slice(0, 19).replace("T", " ")}`,
+            `- **Índice de Salud:** **${summary.score}/100 (Grado ${summary.grade})**`,
+            `- **Resumen:** ${summary.critical} críticos · ${summary.warning} avisos · ${summary.info} sugerencias`,
+            `- **Entidades:** ${(c.tables || []).length} tablas · ${(c.relations || []).length} relaciones`,
+            ``,
+            `## Hallazgos y Recomendaciones`,
+            ``,
+        ];
+        if (alerts.length === 0) {
+            lines.push(`Esquema 100 % verificado sin alertas pendientes.`);
+        } else {
+            alerts.forEach((al, idx) => {
+                lines.push(`### ${idx + 1}. [${String(al.severity || "").toUpperCase()}] ${al.title}`);
+                lines.push(`- **Categoría:** \`${al.category || "general"}\``);
+                if (al.affected_table) {
+                    lines.push(
+                        `- **Elemento:** \`${al.affected_table}${al.affected_column ? "." + al.affected_column : ""}\``
+                    );
+                }
+                lines.push(`- **Detalle técnico:** ${al.technical_message}`);
+                if (al.auto_fix_label) {
+                    lines.push(`- **Corrección sugerida:** ${al.auto_fix_label}`);
+                }
+                lines.push(``);
+            });
+        }
+        const blob = new Blob([lines.join("\n")], { type: "text/markdown;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `auditoria_${c.db_name || "esquema"}.md`;
+        a.click();
+        URL.revokeObjectURL(url);
+        showToast(`Informe de auditoría exportado: auditoria_${c.db_name || "esquema"}.md`);
+    }
+
     function renderAuditorAlerts() {
         const container = document.getElementById("auditor-alerts-container");
         if (!container || !state.contract) return;
-
+        const isEn = state.lang === "en";
         const alerts = state.contract.audit_alerts || [];
-        if (alerts.length === 0) {
-            container.innerHTML = `
-                <div class="inspector-card">
-                    <strong class="audit-title" style="color:var(--accent-emerald);">Esquema 100 % Verificado (0 Alertas)</strong>
-                    <p class="sidebar-helper-text">Todas las tablas cuentan con clave primaria, cumplen la 1ª Forma Normal, utilizan tipos semánticos exactos, protegen el historial frente a cascadas destructivas y tienen índices en sus claves foráneas.</p>
-                </div>
-            `;
-            return;
-        }
-
-        const sevLabel = {
-            critical: "Crítico",
-            warning: "Advertencia",
-            suggestion: "Sugerencia",
-            info: "Info",
+        const summary = (state.contract.tutor_metadata && state.contract.tutor_metadata.audit_summary) || {
+            score: Math.max(
+                0,
+                100 -
+                    alerts.filter((a) => a.severity === "critical").length * 18 -
+                    alerts.filter((a) => a.severity === "warning").length * 7 -
+                    alerts.filter((a) => a.severity === "info").length * 2
+            ),
+            grade: alerts.length === 0 ? "A+" : "B",
+            critical: alerts.filter((a) => a.severity === "critical").length,
+            warning: alerts.filter((a) => a.severity === "warning").length,
+            info: alerts.filter((a) => a.severity === "info").length,
+            safe_fixable: alerts.filter((a) => a.auto_fix_action).length,
         };
 
-        container.innerHTML = alerts
-            .map((al) => {
-                const lesson = al.tutor_lesson || {};
-                const showLesson = state.mode === "tutor" && lesson.concept;
-                return `
-                    <article class="audit-card severity-${escapeHtml(al.severity)}">
-                        <div class="audit-card-header">
-                            <h4 class="audit-title">${escapeHtml(al.title)}</h4>
-                            <span class="severity-badge">${escapeHtml(sevLabel[al.severity] || al.severity)}</span>
-                        </div>
-                        <p class="audit-tech-msg">${escapeHtml(al.technical_message)}</p>
-                        ${
-                            showLesson
-                                ? `
-                            <div class="tutor-micro-lesson">
-                                <strong style="color:var(--accent-amber);">Micro-Lección Tutor: ${escapeHtml(
-                                    lesson.concept
-                                )}</strong>
-                                <p>${escapeHtml(lesson.why_it_matters || "")}</p>
-                                ${
-                                    lesson.before_example
-                                        ? `
-                                    <div class="before-after-grid">
-                                        <div class="ba-box ba-before"><strong>Antes:</strong> ${escapeHtml(
-                                            lesson.before_example
-                                        )}</div>
-                                        <div class="ba-box ba-after"><strong>Después:</strong> ${escapeHtml(
-                                            lesson.after_example || ""
-                                        )}</div>
-                                    </div>
-                                `
-                                        : ""
-                                }
-                                ${
-                                    lesson.analogy
-                                        ? `<p><em>Analogía cotidiana:</em> ${escapeHtml(lesson.analogy)}</p>`
-                                        : ""
-                                }
-                            </div>
-                        `
-                                : ""
-                        }
-                        ${
-                            al.auto_fix_action
-                                ? `
-                            <button type="button" class="btn btn-secondary btn-sm" data-autofix-id="${escapeHtml(
-                                al.id
-                            )}">
-                                <span>${escapeHtml(al.auto_fix_label || "Aplicar Corrección Automática")}</span>
-                            </button>
-                        `
-                                : ""
-                        }
-                    </article>
-                `;
-            })
-            .join("");
+        const scoreTone = summary.score >= 85 ? "ok" : summary.score >= 60 ? "warn" : "crit";
+
+        const filteredAlerts = alerts.filter((al) => {
+            if (activeAuditFilter === "all") return true;
+            if (activeAuditFilter === "critical") return al.severity === "critical";
+            if (activeAuditFilter === "norm") return String(al.category || "").startsWith("normalizacion");
+            if (activeAuditFilter === "perf") return al.category === "rendimiento" || al.category === "grafo_relacional";
+            if (activeAuditFilter === "sec") return al.category === "seguridad" || al.category === "integridad_dominio" || al.category === "portabilidad";
+            return true;
+        });
+
+        const sevLabel = isEn
+            ? { critical: "Critical", warning: "Warning", suggestion: "Suggestion", info: "Suggestion" }
+            : { critical: "Crítico", warning: "Advertencia", suggestion: "Sugerencia", info: "Sugerencia" };
+
+        const headerHtml = `
+            <div class="audit-score-card tone-${scoreTone}">
+                <div class="audit-score-top">
+                    <div>
+                        <div class="audit-score-label">${isEn ? "Schema Health Score" : "Índice de Salud del Esquema"}</div>
+                        <div class="audit-score-value">${summary.score}<span>/100</span></div>
+                    </div>
+                    <span class="audit-grade-badge tone-${scoreTone}">${escapeHtml(summary.grade)}</span>
+                </div>
+                <div class="audit-score-bar"><div class="audit-score-fill tone-${scoreTone}" style="width:${summary.score}%"></div></div>
+                <div class="audit-score-meta">
+                    <span><strong>${summary.critical}</strong> ${isEn ? "critical" : "críticos"}</span>
+                    <span><strong>${summary.warning}</strong> ${isEn ? "warnings" : "avisos"}</span>
+                    <span><strong>${summary.info}</strong> ${isEn ? "tips" : "sugerencias"}</span>
+                </div>
+                <div class="audit-score-actions">
+                    ${
+                        summary.safe_fixable > 0
+                            ? `<button type="button" id="btn-audit-fix-all" class="btn btn-primary btn-sm" style="flex:1;">${
+                                  isEn ? `Fix All Safe (${summary.safe_fixable})` : `Corregir Todo (${summary.safe_fixable})`
+                              }</button>`
+                            : ""
+                    }
+                    <button type="button" id="btn-audit-export-md" class="btn-tool" style="flex:1;">
+                        ${isEn ? "Export Report (.md)" : "Exportar Informe (.md)"}
+                    </button>
+                </div>
+            </div>
+            <div class="audit-filter-pills">
+                <button type="button" class="pill-btn ${activeAuditFilter === "all" ? "active" : ""}" data-audit-filter="all">${isEn ? "All" : "Todos"} (${alerts.length})</button>
+                <button type="button" class="pill-btn ${activeAuditFilter === "critical" ? "active" : ""}" data-audit-filter="critical">${isEn ? "Critical" : "Críticos"} (${summary.critical})</button>
+                <button type="button" class="pill-btn ${activeAuditFilter === "norm" ? "active" : ""}" data-audit-filter="norm">1FN/2FN/3FN</button>
+                <button type="button" class="pill-btn ${activeAuditFilter === "perf" ? "active" : ""}" data-audit-filter="perf">${isEn ? "Perf" : "Rendimiento"}</button>
+                <button type="button" class="pill-btn ${activeAuditFilter === "sec" ? "active" : ""}" data-audit-filter="sec">${isEn ? "Security" : "Seguridad"}</button>
+            </div>
+        `;
+
+        const cardsHtml =
+            filteredAlerts.length === 0
+                ? `<div class="inspector-card">
+                       <strong class="audit-title" style="color:var(--accent-emerald);">${
+                           alerts.length === 0
+                               ? isEn
+                                   ? "100% Verified Schema (0 Alerts)"
+                                   : "Esquema 100 % Verificado (0 Alertas)"
+                               : isEn
+                               ? "No alerts in this category."
+                               : "Sin alertas en esta categoría."
+                       }</strong>
+                       <p class="sidebar-helper-text">${
+                           alerts.length === 0
+                               ? isEn
+                                   ? "All tables have primary keys, proper normalization, secure domain rules and indexed foreign keys."
+                                   : "Todas las tablas cuentan con clave primaria, buena normalización, tipos semánticos exactos, reglas de dominio e índices en claves foráneas."
+                               : ""
+                       }</p>
+                   </div>`
+                : filteredAlerts
+                      .map((al) => {
+                          const lesson = al.tutor_lesson || {};
+                          const showLesson = state.mode === "tutor" && lesson.concept;
+                          return `
+                              <article class="audit-card severity-${escapeHtml(al.severity)}">
+                                  <div class="audit-card-header">
+                                      <h4 class="audit-title">${escapeHtml(al.title)}</h4>
+                                      <span class="severity-badge">${escapeHtml(sevLabel[al.severity] || al.severity)}</span>
+                                  </div>
+                                  <p class="audit-tech-msg">${escapeHtml(al.technical_message)}</p>
+                                  ${
+                                      showLesson
+                                          ? `
+                                      <div class="tutor-micro-lesson">
+                                          <strong style="color:var(--accent-amber);">Micro-Lección Tutor: ${escapeHtml(
+                                              lesson.concept
+                                          )}</strong>
+                                          <p>${escapeHtml(lesson.why_it_matters || "")}</p>
+                                          ${
+                                              lesson.before_example
+                                                  ? `
+                                              <div class="before-after-grid">
+                                                  <div class="ba-box ba-before"><strong>Antes:</strong> ${escapeHtml(
+                                                      lesson.before_example
+                                                  )}</div>
+                                                  <div class="ba-box ba-after"><strong>Después:</strong> ${escapeHtml(
+                                                      lesson.after_example || ""
+                                                  )}</div>
+                                              </div>
+                                          `
+                                                  : ""
+                                          }
+                                          ${
+                                              lesson.analogy
+                                                  ? `<p><em>Analogía cotidiana:</em> ${escapeHtml(lesson.analogy)}</p>`
+                                                  : ""
+                                          }
+                                      </div>
+                                  `
+                                          : ""
+                                  }
+                                  ${
+                                      al.auto_fix_action
+                                          ? `
+                                      <button type="button" class="btn btn-secondary btn-sm" data-autofix-id="${escapeHtml(
+                                          al.id
+                                      )}">
+                                          <span>${escapeHtml(al.auto_fix_label || "Aplicar Corrección Automática")}</span>
+                                      </button>
+                                  `
+                                          : ""
+                                  }
+                              </article>
+                          `;
+                      })
+                      .join("");
+
+        container.innerHTML = headerHtml + cardsHtml;
+
+        container.querySelectorAll("[data-audit-filter]").forEach((btn) => {
+            btn.addEventListener("click", () => {
+                activeAuditFilter = btn.getAttribute("data-audit-filter") || "all";
+                renderAuditorAlerts();
+            });
+        });
+
+        document.getElementById("btn-audit-export-md")?.addEventListener("click", () => {
+            exportAuditReportMarkdown();
+        });
+
+        document.getElementById("btn-audit-fix-all")?.addEventListener("click", async () => {
+            try {
+                const res = await apiFetch("/api/schema/audit/fix-all", {
+                    method: "POST",
+                    body: JSON.stringify(state.contract),
+                });
+                state.contract = res.schema_contract;
+                state.ddlPreviews = res.ddl_previews;
+                state.contract.is_deployed = false;
+                undoManager.record(state.contract);
+                syncAllViews();
+                erCanvas.fitToViewport();
+                showToast(res.summary || "Correcciones aplicadas.");
+            } catch (err) {
+                showToast(`Error al aplicar correcciones: ${err.message}`);
+            }
+        });
 
         container.querySelectorAll("[data-autofix-id]").forEach((btn) => {
             btn.addEventListener("click", async () => {
@@ -569,7 +724,7 @@ import { SchemaUndoManager } from "./modules/undo_manager.js";
                     state.contract.is_deployed = false;
                     undoManager.record(state.contract);
                     syncAllViews();
-            erCanvas.fitToViewport();
+                    erCanvas.fitToViewport();
                     showToast(res.summary || "Corrección automática aplicada al boceto.");
                 } catch (err) {
                     showToast(`Error al aplicar corrección: ${err.message}`);
@@ -1369,6 +1524,9 @@ import { SchemaUndoManager } from "./modules/undo_manager.js";
                 await refreshDatabasesList();
             }
 
+            if (sqlEditor && typeof sqlEditor.clearErrorLine === "function") {
+                sqlEditor.clearErrorLine();
+            }
             renderSQLQueryResults(res);
         } catch (err) {
             const banner = document.getElementById("sql-explain-banner");
@@ -1389,18 +1547,45 @@ import { SchemaUndoManager } from "./modules/undo_manager.js";
                     ? `Error SQL (${t("errLinePrefix", state.lang)} ${realLine}): ${sqlErr.raw_error}`
                     : err.message;
 
+            if (sqlEditor && typeof sqlEditor.setErrorLine === "function") {
+                sqlEditor.setErrorLine(realLine);
+            }
+
             if (metrics) {
                 metrics.textContent = `${t("errLinePrefix", state.lang)} ${realLine} · Error`;
             }
             if (banner) {
-                banner.innerHTML = `<div class="explain-rec-row" style="border-color:var(--accent-crimson); background:var(--accent-crimson-tint); color:var(--text-primary);"><span>${escapeHtml(
-                    displayMsg
-                )}</span></div>`;
+                banner.innerHTML = `
+                    <div class="sql-error-banner-card">
+                        <div class="sql-error-banner-top">
+                            <span class="inspector-error-badge">ERROR SQL · ${escapeHtml(t("errLinePrefix", state.lang))} ${realLine}</span>
+                            ${
+                                sqlErr.rolled_back
+                                    ? `<span class="inspector-rollback-pill">${escapeHtml(t("errRollbackBadge", state.lang))}</span>`
+                                    : ""
+                            }
+                            <button type="button" id="btn-banner-jump-err" class="btn-xs" style="margin-left:auto;">
+                                ${escapeHtml(t("errJumpBtn", state.lang))} &rarr;
+                            </button>
+                        </div>
+                        <div class="sql-error-banner-msg">${escapeHtml(sqlErr.raw_error || displayMsg)}</div>
+                        ${
+                            sqlErr.hint
+                                ? `<div class="sql-error-banner-hint"><strong>${escapeHtml(t("errHintLabel", state.lang))}</strong> ${escapeHtml(sqlErr.hint)}</div>`
+                                : ""
+                        }
+                    </div>
+                `;
+                document.getElementById("btn-banner-jump-err")?.addEventListener("click", () => {
+                    if (sqlEditor && typeof sqlEditor.jumpToLine === "function") {
+                        sqlEditor.jumpToLine(realLine);
+                    }
+                });
             }
             if (thead) thead.innerHTML = "";
             if (tbody) {
-                tbody.innerHTML = `<tr><td style="padding:18px; color:var(--accent-crimson); white-space:normal;">${escapeHtml(
-                    displayMsg
+                tbody.innerHTML = `<tr><td style="padding:14px 18px; color:var(--text-secondary); white-space:normal;">${escapeHtml(
+                    sqlErr.statement || displayMsg
                 )}</td></tr>`;
             }
             renderInspectorSQLError(sqlErr, startLineOffset);

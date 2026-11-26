@@ -37,6 +37,15 @@ MONEY_TOKENS = (
     "tarifa",
     "cuota",
     "presupuesto",
+    "price",
+    "cost",
+    "amount",
+    "salary",
+    "wage",
+    "fee",
+    "budget",
+    "rate",
+    "balance",
 )
 
 DATE_TOKENS = (
@@ -46,7 +55,62 @@ DATE_TOKENS = (
     "ingreso",
     "emision",
     "prestamo",
+    "date",
+    "birth",
+    "created_at",
+    "updated_at",
+    "expires",
+    "due_date",
 )
+
+NON_NEGATIVE_TOKENS = (
+    "precio",
+    "price",
+    "cuota",
+    "importe",
+    "amount",
+    "coste",
+    "cost",
+    "stock",
+    "cantidad",
+    "quantity",
+    "edad",
+    "age",
+    "descuento",
+    "discount",
+    "salario",
+    "salary",
+    "tarifa",
+    "fee",
+    "num_horas",
+    "hours",
+)
+
+PASSWORD_TOKENS = ("password", "passwd", "pwd", "contrasena", "clave_acceso", "pass_hash")
+
+UNIQUE_PII_TOKENS = ("dni", "nif", "nie", "ssn", "passport", "pasaporte", "email", "correo")
+
+SQL_RESERVED_WORDS = {
+    "order",
+    "user",
+    "group",
+    "select",
+    "table",
+    "index",
+    "key",
+    "check",
+    "default",
+    "values",
+    "from",
+    "where",
+    "join",
+    "limit",
+    "desc",
+    "asc",
+    "date",
+    "time",
+    "values",
+}
 
 
 class ProactiveAuditor:
@@ -423,8 +487,254 @@ class ProactiveAuditor:
                     )
                 )
 
+        # 5. Reglas Avanzadas: 2FN, 3FN, Seguridad (Password/PII), CHECK de dominio, Grafo y Palabras Reservadas
+        self._audit_advanced_rules(contract, table_map, alerts)
+
         contract.audit_alerts = alerts
+        contract.tutor_metadata = dict(contract.tutor_metadata or {})
+        contract.tutor_metadata["audit_summary"] = self.compute_health_score(alerts)
         return alerts
+
+    def compute_health_score(self, alerts: List[AuditAlertModel]) -> Dict[str, Any]:
+        """Calcula el Índice de Salud del Esquema (0-100) y Grado (A+ a D) de forma determinista."""
+        critical = sum(1 for a in alerts if a.severity == "critical")
+        warnings = sum(1 for a in alerts if a.severity == "warning")
+        infos = sum(1 for a in alerts if a.severity == "info")
+        score = max(0, min(100, 100 - critical * 18 - warnings * 7 - infos * 2))
+        if score >= 95:
+            grade = "A+"
+        elif score >= 85:
+            grade = "A"
+        elif score >= 70:
+            grade = "B"
+        elif score >= 50:
+            grade = "C"
+        else:
+            grade = "D"
+        safe_fixable = sum(
+            1
+            for a in alerts
+            if a.auto_fix_action
+            in (
+                "create_fk_index",
+                "change_type_decimal",
+                "change_type_date",
+                "sync_fk_type",
+                "widen_password_hash",
+                "add_unique_constraint",
+                "add_non_negative_check",
+                "add_primary_key",
+            )
+        )
+        return {
+            "score": score,
+            "grade": grade,
+            "critical": critical,
+            "warning": warnings,
+            "info": infos,
+            "total": len(alerts),
+            "safe_fixable": safe_fixable,
+        }
+
+    def _audit_advanced_rules(
+        self,
+        contract: MasterSchemaContract,
+        table_map: Dict[str, TableModel],
+        alerts: List[AuditAlertModel],
+    ) -> None:
+        # 5a. Palabras reservadas SQL, Seguridad (Password / PII UNIQUE) y CHECK de dominio
+        for tbl in contract.tables:
+            if tbl.name.lower() in SQL_RESERVED_WORDS:
+                alerts.append(
+                    AuditAlertModel(
+                        id=f"audit_reserved_tbl_{tbl.name}",
+                        severity="warning",
+                        category="portabilidad",
+                        title=f"Nombre de tabla '{tbl.name}' es una palabra reservada SQL",
+                        technical_message=(
+                            f"'{tbl.name}' es una palabra reservada en SQL estándar. Al migrar a MySQL, PostgreSQL o SQL Server "
+                            "requerirá comillas delimitadoras en cada consulta y puede provocar errores de sintaxis."
+                        ),
+                        affected_table=tbl.name,
+                    )
+                )
+
+            pk_cols = [c for c in tbl.columns if c.is_pk] or (
+                [c for c in tbl.columns if c.name in tbl.primary_key] if tbl.primary_key else []
+            )
+            pk_names = {c.name.lower() for c in pk_cols}
+
+            # Detectar tablas padre referenciadas por esta tabla (para 2FN / 3FN)
+            fk_parents = {
+                c.fk_target_table
+                for c in tbl.columns
+                if c.is_fk and c.fk_target_table and c.fk_target_table in table_map and c.fk_target_table != tbl.name
+            }
+
+            for col in tbl.columns:
+                low_col = col.name.lower()
+                up_type = col.data_type.upper()
+
+                # Seguridad: Contraseñas cortas (texto plano en vez de hash)
+                if any(tok in low_col for tok in PASSWORD_TOKENS):
+                    if up_type in ("VARCHAR", "CHAR") and (col.length is None or col.length < 60):
+                        alerts.append(
+                            AuditAlertModel(
+                                id=f"audit_sec_pwd_{tbl.name}_{col.name}",
+                                severity="critical",
+                                category="seguridad",
+                                title=f"Columna de contraseña '{tbl.name}.{col.name}' demasiado corta para hash seguro",
+                                technical_message=(
+                                    f"'{col.name}' tiene tipo {col.data_type}({col.length or 'sin longitud'}), insuficiente para almacenar "
+                                    "hashes modernos (bcrypt/Argon2 requieren ≥ 60–255 caracteres). Nunca guardes contraseñas en texto plano."
+                                ),
+                                affected_table=tbl.name,
+                                affected_column=col.name,
+                                auto_fix_action="widen_password_hash",
+                                auto_fix_label="Ampliar a VARCHAR(255) para hash seguro",
+                                auto_fix_payload={"table": tbl.name, "column": col.name},
+                            )
+                        )
+
+                # Seguridad / PII: DNI / Email / SSN sin UNIQUE
+                if (
+                    any(low_col == tok or low_col.endswith(f"_{tok}") for tok in UNIQUE_PII_TOKENS)
+                    and not col.is_unique
+                    and not col.is_pk
+                    and not col.is_fk
+                ):
+                    alerts.append(
+                        AuditAlertModel(
+                            id=f"audit_sec_pii_uq_{tbl.name}_{col.name}",
+                            severity="info",
+                            category="seguridad",
+                            title=f"Identificador personal '{tbl.name}.{col.name}' sin restricción UNIQUE",
+                            technical_message=(
+                                f"La columna '{col.name}' almacena un dato identificativo único por persona. "
+                                "Añadir UNIQUE evita duplicados accidentales y acelera búsquedas por ese campo."
+                            ),
+                            affected_table=tbl.name,
+                            affected_column=col.name,
+                            auto_fix_action="add_unique_constraint",
+                            auto_fix_label=f"Añadir UNIQUE en '{col.name}'",
+                            auto_fix_payload={"table": tbl.name, "column": col.name},
+                        )
+                    )
+
+                # Integridad de dominio: columnas monetarias/cantidad sin CHECK (>= 0)
+                if (
+                    any(tok in low_col for tok in NON_NEGATIVE_TOKENS)
+                    and not col.check_constraint
+                    and not col.is_pk
+                    and not col.is_fk
+                    and not col.computed_expression
+                    and any(nt in up_type for nt in ("DECIMAL", "NUMERIC", "INT", "FLOAT", "REAL"))
+                ):
+                    alerts.append(
+                        AuditAlertModel(
+                            id=f"audit_domain_chk_{tbl.name}_{col.name}",
+                            severity="info",
+                            category="integridad_dominio",
+                            title=f"Columna '{tbl.name}.{col.name}' sin restricción CHECK (>= 0)",
+                            technical_message=(
+                                f"La columna numérica '{col.name}' acepta valores negativos actualmente. "
+                                f"Añadir `CHECK ({col.name} >= 0)` garantiza integridad de dominio directamente en el motor SQL."
+                            ),
+                            affected_table=tbl.name,
+                            affected_column=col.name,
+                            auto_fix_action="add_non_negative_check",
+                            auto_fix_label=f"Añadir CHECK ({col.name} >= 0)",
+                            auto_fix_payload={"table": tbl.name, "column": col.name},
+                        )
+                    )
+
+                # 2FN / 3FN: redundancia de atributos de una tabla padre en una tabla hija
+                if low_col not in pk_names and not col.is_fk and fk_parents:
+                    for parent_name in fk_parents:
+                        p_sing = to_singular(parent_name).lower()
+                        p_low = parent_name.lower()
+                        if len(p_sing) >= 4 and (
+                            low_col.endswith(f"_{p_sing}") or low_col.endswith(f"_{p_low}")
+                        ):
+                            is_2fn = len(pk_cols) > 1
+                            norm_label = "2ª Forma Normal (2FN)" if is_2fn else "3ª Forma Normal (3FN)"
+                            cat = "normalizacion_2fn" if is_2fn else "normalizacion_3fn"
+                            alerts.append(
+                                AuditAlertModel(
+                                    id=f"audit_norm_{cat}_{tbl.name}_{col.name}",
+                                    severity="warning",
+                                    category=cat,
+                                    title=f"Posible violación de {norm_label} en '{tbl.name}.{col.name}'",
+                                    technical_message=(
+                                        f"'{tbl.name}' ya referencia a '{parent_name}' mediante clave foránea, pero también almacena '{col.name}'. "
+                                        f"Este atributo parece depender de '{parent_name}' y genera redundancia/anomalías de actualización."
+                                    ),
+                                    affected_table=tbl.name,
+                                    affected_column=col.name,
+                                )
+                            )
+                            break
+
+        # 5b. Detección de ciclos en claves foráneas (DFS)
+        adj: Dict[str, List[str]] = {t.name: [] for t in contract.tables}
+        for r in contract.relations:
+            if r.source_table in adj and r.target_table in adj and r.source_table != r.target_table:
+                adj[r.source_table].append(r.target_table)
+
+        visited_state: Dict[str, int] = {t.name: 0 for t in contract.tables}
+        cycle_reported: set = set()
+
+        def dfs_cycle(node: str, path: List[str]) -> None:
+            visited_state[node] = 1
+            for nxt in adj.get(node, []):
+                if visited_state.get(nxt, 0) == 1:
+                    cycle_slice = path[path.index(nxt) :] + [nxt]
+                    sig = tuple(sorted(set(cycle_slice)))
+                    if sig not in cycle_reported:
+                        cycle_reported.add(sig)
+                        chain = " → ".join(cycle_slice)
+                        alerts.append(
+                            AuditAlertModel(
+                                id=f"audit_fk_cycle_{'_'.join(sig)}",
+                                severity="warning",
+                                category="grafo_relacional",
+                                title=f"Ciclo de claves foráneas detectado ({chain})",
+                                technical_message=(
+                                    f"Existe una dependencia circular entre tablas ({chain}). "
+                                    "Los ciclos referenciales dificultan inserciones iniciales, migraciones y borrados en orden topológico."
+                                ),
+                                affected_table=nxt,
+                            )
+                        )
+                elif visited_state.get(nxt, 0) == 0:
+                    dfs_cycle(nxt, path + [nxt])
+            visited_state[node] = 2
+
+        for t_name in list(adj.keys()):
+            if visited_state[t_name] == 0:
+                dfs_cycle(t_name, [t_name])
+
+        # 5c. Tablas aisladas / desconectadas en esquemas con >= 3 tablas
+        if len(contract.tables) >= 3:
+            connected = set()
+            for r in contract.relations:
+                connected.add(r.source_table)
+                connected.add(r.target_table)
+            for tbl in contract.tables:
+                if tbl.name not in connected:
+                    alerts.append(
+                        AuditAlertModel(
+                            id=f"audit_isolated_tbl_{tbl.name}",
+                            severity="info",
+                            category="grafo_relacional",
+                            title=f"Tabla aislada '{tbl.name}' sin relaciones con el resto del esquema",
+                            technical_message=(
+                                f"'{tbl.name}' no participa en ninguna clave foránea (ni entrante ni saliente). "
+                                "Verifica si debe vincularse a otra entidad mediante 'Vincular Tablas (FK)'."
+                            ),
+                            affected_table=tbl.name,
+                        )
+                    )
 
     def apply_auto_fix(self, contract: MasterSchemaContract, alert_id: str) -> Tuple[MasterSchemaContract, str]:
         """Aplica la acción de corrección automática en un clic sobre el Contrato Maestro JSON."""
@@ -519,6 +829,26 @@ class ProactiveAuditor:
                 tbl.indexes.append(col_name)
             summary = f"Se añadió el índice de rendimiento 'idx_{tbl.name}_{col_name}' en la tabla '{tbl.name}'."
 
+        elif action == "widen_password_hash":
+            tbl = table_map[payload["table"]]
+            col = next(c for c in tbl.columns if c.name == payload["column"])
+            col.data_type = "VARCHAR"
+            col.length = 255
+            col.nullable = False
+            summary = f"Seguridad aplicada: '{tbl.name}.{col.name}' ampliada a VARCHAR(255) NOT NULL para hashes seguros."
+
+        elif action == "add_unique_constraint":
+            tbl = table_map[payload["table"]]
+            col = next(c for c in tbl.columns if c.name == payload["column"])
+            col.is_unique = True
+            summary = f"Se añadió la restricción UNIQUE sobre '{tbl.name}.{col.name}'."
+
+        elif action == "add_non_negative_check":
+            tbl = table_map[payload["table"]]
+            col = next(c for c in tbl.columns if c.name == payload["column"])
+            col.check_constraint = f"{col.name} >= 0"
+            summary = f"Se añadió la regla de dominio CHECK ({col.name} >= 0) en '{tbl.name}.{col.name}'."
+
         elif action == "change_on_delete_restrict":
             rel_id = payload["relation_id"]
             parent_tbl_name = payload["parent_table"]
@@ -540,6 +870,31 @@ class ProactiveAuditor:
         contract.updated_at = datetime.now().isoformat(timespec="seconds")
         self.audit_schema(contract)
         return contract, summary
+
+    def apply_all_safe_fixes(self, contract: MasterSchemaContract) -> Tuple[MasterSchemaContract, int, List[str]]:
+        """Aplica en una sola pasada todas las correcciones seguras no destructivas del Auditor."""
+        safe_actions = {
+            "create_fk_index",
+            "change_type_decimal",
+            "change_type_date",
+            "sync_fk_type",
+            "widen_password_hash",
+            "add_unique_constraint",
+            "add_non_negative_check",
+            "add_primary_key",
+        }
+        applied: List[str] = []
+        self.audit_schema(contract)
+        for _ in range(30):
+            target = next(
+                (a for a in contract.audit_alerts if a.auto_fix_action in safe_actions),
+                None,
+            )
+            if not target:
+                break
+            contract, msg = self.apply_auto_fix(contract, target.id)
+            applied.append(msg)
+        return contract, len(applied), applied
 
     def _sync_relations_with_columns(
         self, contract: MasterSchemaContract, table_map: Dict[str, TableModel]
@@ -763,11 +1118,81 @@ class ProactiveAuditor:
                             "index_name": None,
                             "ddl": None,
                             "plan_detail": detail,
+                            "severity": "info",
                             "message": (
                                 f"Lectura secuencial completa (`{detail}`) sobre `{scanned_table}`. "
                                 "Es normal si consultas toda la tabla sin filtro WHERE, pero considera filtrar o paginar si la tabla crece."
                             ),
                         }
                     )
+
+        # Anti-patrones estáticos de rendimiento en la consulta SELECT
+        if re.search(r"\bJOIN\b", cleaned_sql, flags=re.IGNORECASE) and not re.search(
+            r"\b(?:ON|USING|NATURAL|CROSS\s+JOIN)\b", cleaned_sql, flags=re.IGNORECASE
+        ):
+            recommendations.append(
+                {
+                    "table": None,
+                    "column": None,
+                    "index_name": None,
+                    "ddl": None,
+                    "severity": "critical",
+                    "message": (
+                        "Anti-patrón crítico: JOIN sin cláusula ON ni USING. "
+                        "Genera un producto cartesiano (N × M filas) que degrada severamente el rendimiento."
+                    ),
+                }
+            )
+
+        if re.search(r"\bLIKE\s+'%", cleaned_sql, flags=re.IGNORECASE):
+            recommendations.append(
+                {
+                    "table": None,
+                    "column": None,
+                    "index_name": None,
+                    "ddl": None,
+                    "severity": "warning",
+                    "message": (
+                        "Anti-patrón de rendimiento: `LIKE '%texto%'` con comodín inicial impide usar índices B-Tree. "
+                        "Cuando sea posible usa prefijo (`LIKE 'texto%'`)."
+                    ),
+                }
+            )
+
+        if re.search(
+            r"\bWHERE\b[^;]*\b(?:LOWER|UPPER|SUBSTR|SUBSTRING|TRIM|YEAR|MONTH|DATE)\s*\(\s*[a-zA-Z_][a-zA-Z0-9_.]*\s*\)",
+            cleaned_sql,
+            flags=re.IGNORECASE,
+        ):
+            recommendations.append(
+                {
+                    "table": None,
+                    "column": None,
+                    "index_name": None,
+                    "ddl": None,
+                    "severity": "warning",
+                    "message": (
+                        "Anti-patrón SARGable: aplicar una función sobre una columna dentro del WHERE "
+                        "(ej. LOWER(col) o YEAR(fecha)) impide aprovechar índices sobre esa columna."
+                    ),
+                }
+            )
+
+        if re.search(r"^SELECT\s+\*\s+FROM\b", cleaned_sql, flags=re.IGNORECASE) and re.search(
+            r"\bJOIN\b", cleaned_sql, flags=re.IGNORECASE
+        ):
+            recommendations.append(
+                {
+                    "table": None,
+                    "column": None,
+                    "index_name": None,
+                    "ddl": None,
+                    "severity": "info",
+                    "message": (
+                        "Buena práctica: evita `SELECT *` en consultas con JOIN; selecciona solo las columnas necesarias "
+                        "para reducir transferencia y evitar colisiones de nombres."
+                    ),
+                }
+            )
 
         return recommendations

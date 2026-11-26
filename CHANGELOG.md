@@ -2,6 +2,14 @@
 
 Todos los cambios relevantes de **ChemySQL** se documentan en este archivo.
 
+## [1.6.0] - 2026-11-26
+
+### Añadido y mejorado
+* **Auditor Empresarial Avanzado:** Índice de Salud del Esquema (`0–100` y grado `A+`–`D`), filtros por categoría, botón **"Corregir Todo"** (`POST /api/schema/audit/fix-all`) y exportación de informe técnico en Markdown (`.md`).
+* **Nuevas reglas deterministas (ES/EN):** detección de **2ª y 3ª Forma Normal (2FN / 3FN)**, seguridad en contraseñas cortas (`VARCHAR(255)` auto-fix), identificadores PII sin `UNIQUE`, reglas de dominio `CHECK (>= 0)`, ciclos de claves foráneas, tablas aisladas y palabras reservadas SQL.
+* **Auditoría de anti-patrones en consultas SQL:** detección de `JOIN` sin `ON` (producto cartesiano), `LIKE '%texto%'`, funciones no SARGables en `WHERE` y `SELECT *` en consultas con `JOIN`.
+* **Resaltado visual de línea con error en el Editor SQL:** marca la línea fallida en el margen (`● N`) y dentro del código con tarjeta estructurada de error, estado de `ROLLBACK` atómico y salto en 1 clic.
+
 ## [1.5.0] - 2026-11-26
 
 ### Añadido y corregido

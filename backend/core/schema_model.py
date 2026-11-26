@@ -94,10 +94,17 @@ class AuditAlertModel(BaseModel):
     category: Literal[
         "integridad_claves",
         "normalizacion_1fn",
+        "normalizacion_2fn",
+        "normalizacion_3fn",
         "tipos_datos",
         "cascada_peligrosa",
         "rendimiento_indices",
+        "rendimiento",
         "escudo_ejecucion",
+        "seguridad",
+        "integridad_dominio",
+        "grafo_relacional",
+        "portabilidad",
     ]
     title: str
     technical_message: str
