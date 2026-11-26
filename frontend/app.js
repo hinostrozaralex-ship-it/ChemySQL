@@ -15,9 +15,12 @@ import {
     writeStorage,
 } from "./modules/core.js";
 import { exportExplorerTable, exportSQLResults } from "./modules/export_utils.js";
+import { LANG_STORAGE_KEY, applyLanguageToDOM, t } from "./modules/i18n.js";
+import { renderLiveSQLInspector, renderProfessionalInspector } from "./modules/inspector.js";
 import { SchemaUndoManager } from "./modules/undo_manager.js";
 
     const state = createInitialState();
+    state.lang = "es";
     const undoManager = new SchemaUndoManager(40);
 
     let erCanvas = null;
@@ -31,6 +34,20 @@ import { SchemaUndoManager } from "./modules/undo_manager.js";
         if (savedTheme === "dark" || savedTheme === "light") {
             state.theme = savedTheme;
             document.documentElement.setAttribute("data-theme", state.theme);
+        }
+        const savedLang = readStorage(LANG_STORAGE_KEY);
+        if (savedLang === "en" || savedLang === "es") {
+            state.lang = savedLang;
+            applyLanguageToDOM(state.lang);
+        } else {
+            apiFetch("/api/health")
+                .then((h) => {
+                    if (h && (h.default_language === "en" || h.default_language === "es")) {
+                        state.lang = h.default_language;
+                        applyLanguageToDOM(state.lang);
+                    }
+                })
+                .catch(() => {});
         }
         const savedLeft = Number(readStorage(STORAGE_KEYS.leftWidth));
         if (Number.isFinite(savedLeft) && savedLeft >= 210 && savedLeft <= 440) {
@@ -73,17 +90,25 @@ import { SchemaUndoManager } from "./modules/undo_manager.js";
         });
 
         let sqlDebounce = null;
+        let sqlLiveInspectDebounce = null;
         sqlEditor = new window.SQLCodeEditorController({
             textareaId: "sql-code-textarea",
             highlightId: "sql-highlight-layer",
             gutterId: "sql-line-gutter",
             popupId: "sql-autocomplete-popup",
             getSchemaContract: () => state.contract,
-            onChange: () => {
+            onChange: (val) => {
                 if (state.mode === "tutor") {
                     clearTimeout(sqlDebounce);
                     sqlDebounce = setTimeout(() => refreshLiveSQLDecomposition(), 240);
                 }
+                clearTimeout(sqlLiveInspectDebounce);
+                sqlLiveInspectDebounce = setTimeout(() => {
+                    const inspTab = document.getElementById("right-tab-inspector");
+                    if (inspTab && inspTab.classList.contains("active")) {
+                        refreshLiveSQLInspectorPanel(val);
+                    }
+                }, 260);
             },
             onExecuteShortcut: () => executeSQLQuery(false),
             onSaveShortcut: () => saveCurrentSQLFile(false),
@@ -553,268 +578,48 @@ import { SchemaUndoManager } from "./modules/undo_manager.js";
         });
     }
 
+    function refreshLiveSQLInspectorPanel(sqlText) {
+        const container = document.getElementById("inspector-editor-container");
+        if (!container || !state.contract) return;
+        renderLiveSQLInspector(container, sqlText, state.contract, {
+            lang: state.lang || "es",
+            onJumpToLine: (line) => {
+                activateCenterView("sql");
+                activateSQLSubtab("dml");
+                if (sqlEditor && typeof sqlEditor.jumpToLine === "function") {
+                    sqlEditor.jumpToLine(line);
+                }
+            },
+            onSelectElement: (sel) => {
+                state.selectedElement = sel;
+                renderInspectorEditor();
+            },
+        });
+    }
+
     function renderInspectorEditor() {
         const container = document.getElementById("inspector-editor-container");
         if (!container || !state.contract) return;
-
-        const sel = state.selectedElement;
-        if (!sel) {
-            container.innerHTML = `
-                <div class="inspector-card">
-                    <h3 class="sidebar-heading">Inspector de Propiedades</h3>
-                    <p class="sidebar-helper-text">Haz clic en cualquier tabla, columna o línea de relación del Lienzo ER para editar su estructura, tipos de datos o políticas de borrado.</p>
-                </div>
-            `;
-            return;
-        }
-
-        if (sel.type === "table") {
-            const tbl = (state.contract.tables || []).find((t) => t.name === sel.table);
-            if (!tbl) return;
-
-            container.innerHTML = `
-                <div class="inspector-card">
-                    <div class="audit-card-header">
-                        <h3 class="sidebar-heading">Editar Tabla: ${escapeHtml(tbl.name)}</h3>
-                        <button type="button" class="btn-xs" id="btn-delete-table" style="color:var(--accent-crimson);">Eliminar Tabla</button>
-                    </div>
-                    <div class="form-row">
-                        <label for="insp-table-name">Nombre de la tabla (snake_case)</label>
-                        <input id="insp-table-name" type="text" class="control-input-sm" value="${escapeHtml(tbl.name)}">
-                    </div>
-                    <div class="form-row">
-                        <label for="insp-table-desc">Descripción funcional</label>
-                        <input id="insp-table-desc" type="text" class="control-input-sm" value="${escapeHtml(tbl.description || "")}">
-                    </div>
-                    <button type="button" class="btn btn-secondary btn-sm" id="btn-save-table-meta">Actualizar Tabla</button>
-                </div>
-
-                <div class="inspector-card">
-                    <h3 class="sidebar-heading">Añadir Nueva Columna a '${escapeHtml(tbl.name)}'</h3>
-                    <div class="form-row">
-                        <label for="new-col-name">Nombre de columna</label>
-                        <input id="new-col-name" type="text" class="control-input-sm" placeholder="ej. telefono_2, descuento, fecha_baja">
-                    </div>
-                    <div class="form-row">
-                        <label for="new-col-type">Tipo de dato SQL</label>
-                        <select id="new-col-type" class="control-select-sm">
-                            <option value="VARCHAR">VARCHAR(150)</option>
-                            <option value="INTEGER">INTEGER</option>
-                            <option value="DECIMAL(10,2)">DECIMAL(10,2)</option>
-                            <option value="DATE">DATE</option>
-                            <option value="DATETIME">DATETIME</option>
-                            <option value="BOOLEAN">BOOLEAN</option>
-                            <option value="TEXT">TEXT</option>
-                            <option value="FLOAT">FLOAT (Coma flotante)</option>
-                        </select>
-                    </div>
-                    <button type="button" class="btn btn-primary btn-sm" id="btn-add-column-submit">+ Añadir Columna y Auditar</button>
-                </div>
-            `;
-
-            document.getElementById("btn-save-table-meta").addEventListener("click", () => {
-                const newName = document.getElementById("insp-table-name").value.trim().toLowerCase().replace(/\s+/g, "_");
-                const newDesc = document.getElementById("insp-table-desc").value.trim();
-                if (newName && newName !== tbl.name) {
-                    if ((state.contract.tables || []).some((t) => t !== tbl && t.name === newName)) {
-                        showToast(`Ya existe una tabla llamada '${newName}'.`);
-                        return;
-                    }
-                    const oldName = tbl.name;
-                    tbl.name = newName;
-                    (state.contract.relations || []).forEach((r) => {
-                        if (r.source_table === oldName) r.source_table = newName;
-                        if (r.target_table === oldName) r.target_table = newName;
-                    });
-                    (state.contract.tables || []).forEach((t) => {
-                        (t.columns || []).forEach((c) => {
-                            if (c.fk_target_table === oldName) c.fk_target_table = newName;
-                        });
-                    });
-                    if (state.selectedElement && state.selectedElement.table === oldName) {
-                        state.selectedElement.table = newName;
-                    }
-                    if (state.explorer.activeTable === oldName) {
-                        state.explorer.activeTable = newName;
-                    }
+        renderProfessionalInspector(container, state, {
+            onSelectElement: (sel) => {
+                state.selectedElement = sel;
+                renderInspectorEditor();
+                if (tutorCtrl) tutorCtrl.renderContextualLesson(state.contract, sel);
+            },
+            onSchemaMutated: (contract, runAudit = true) => handleLocalSchemaMutation(contract, runAudit),
+            onDeleteTable: (tableName) => requestDeleteTable(tableName),
+            onOpenTableInExplorer: (tableName) => {
+                state.explorer.activeTable = tableName;
+                state.explorer.page = 1;
+                activateCenterView("explorer");
+                renderExplorerTablePills();
+                if (state.contract.is_deployed) {
+                    loadExplorerTableRows();
+                } else {
+                    renderUndeployedExplorerNotice();
                 }
-                tbl.description = newDesc;
-                handleLocalSchemaMutation(state.contract, true);
-            });
-
-            document.getElementById("btn-delete-table").addEventListener("click", () => {
-                requestDeleteTable(tbl.name);
-            });
-
-            document.getElementById("btn-add-column-submit").addEventListener("click", () => {
-                const cName = document.getElementById("new-col-name").value.trim().toLowerCase().replace(/\s+/g, "_");
-                const cType = document.getElementById("new-col-type").value;
-                if (!cName) {
-                    showToast("Escribe un nombre para la columna.");
-                    return;
-                }
-                if (tbl.columns.some((c) => c.name === cName)) {
-                    showToast(`La columna '${cName}' ya existe en '${tbl.name}'.`);
-                    return;
-                }
-                tbl.columns.push({
-                    name: cName,
-                    data_type: cType,
-                    length: cType === "VARCHAR" ? 150 : null,
-                    nullable: true,
-                    default_value: null,
-                    is_pk: false,
-                    is_fk: false,
-                    is_unique: false,
-                    auto_increment: false,
-                    description: `Columna añadida visualmente en ${tbl.name}`,
-                    tutor_explanation: `Atributo '${cName}' con tipo ${cType}.`,
-                });
-                handleLocalSchemaMutation(state.contract, true);
-            });
-            return;
-        }
-
-        if (sel.type === "column") {
-            const tbl = (state.contract.tables || []).find((t) => t.name === sel.table);
-            const col = tbl ? (tbl.columns || []).find((c) => c.name === sel.column) : null;
-            if (!tbl || !col) return;
-
-            const types = ["INTEGER", "VARCHAR", "DECIMAL(10,2)", "DATE", "DATETIME", "BOOLEAN", "TEXT", "FLOAT"];
-            container.innerHTML = `
-                <div class="inspector-card">
-                    <div class="audit-card-header">
-                        <h3 class="sidebar-heading">Columna: ${escapeHtml(tbl.name)}.${escapeHtml(col.name)}</h3>
-                        ${
-                            !col.is_pk
-                                ? `<button type="button" class="btn-xs" id="btn-delete-col" style="color:var(--accent-crimson);">Borrar Columna</button>`
-                                : ""
-                        }
-                    </div>
-                    <div class="form-row">
-                        <label for="edit-col-name">Nombre</label>
-                        <input id="edit-col-name" type="text" class="control-input-sm" value="${escapeHtml(col.name)}">
-                    </div>
-                    <div class="form-row">
-                        <label for="edit-col-type">Tipo SQL</label>
-                        <select id="edit-col-type" class="control-select-sm">
-                            ${types
-                                .map(
-                                    (t) =>
-                                        `<option value="${t}" ${
-                                            col.data_type.toUpperCase() === t ? "selected" : ""
-                                        }>${t}</option>`
-                                )
-                                .join("")}
-                        </select>
-                    </div>
-                    <div class="form-row">
-                        <label>
-                            <input id="edit-col-unique" type="checkbox" ${col.is_unique ? "checked" : ""}>
-                            Restricción UNIQUE (Valor irrepetible)
-                        </label>
-                    </div>
-                    <div class="form-row">
-                        <label>
-                            <input id="edit-col-nullable" type="checkbox" ${col.nullable ? "checked" : ""}>
-                            Permitir valores NULL
-                        </label>
-                    </div>
-                    <button type="button" class="btn btn-primary btn-sm" id="btn-save-col-changes">Aplicar Cambios a Columna</button>
-                </div>
-            `;
-
-            document.getElementById("btn-save-col-changes").addEventListener("click", () => {
-                const oldCol = col.name;
-                const newCol =
-                    document.getElementById("edit-col-name").value.trim().toLowerCase().replace(/\s+/g, "_") || oldCol;
-                if (newCol !== oldCol) {
-                    if ((tbl.columns || []).some((c) => c !== col && c.name === newCol)) {
-                        showToast(`La columna '${newCol}' ya existe en '${tbl.name}'.`);
-                        return;
-                    }
-                    col.name = newCol;
-                    if (Array.isArray(tbl.primary_key)) {
-                        tbl.primary_key = tbl.primary_key.map((p) => (p === oldCol ? newCol : p));
-                    }
-                    if (Array.isArray(tbl.indexes)) {
-                        tbl.indexes = tbl.indexes.map((ix) => (ix === oldCol ? newCol : ix));
-                    }
-                    (state.contract.relations || []).forEach((r) => {
-                        if (r.source_table === tbl.name && r.source_column === oldCol) r.source_column = newCol;
-                        if (r.target_table === tbl.name && r.target_column === oldCol) r.target_column = newCol;
-                    });
-                    (state.contract.tables || []).forEach((t) => {
-                        (t.columns || []).forEach((c) => {
-                            if (c.fk_target_table === tbl.name && c.fk_target_column === oldCol) {
-                                c.fk_target_column = newCol;
-                            }
-                        });
-                    });
-                    if (state.selectedElement && state.selectedElement.type === "column") {
-                        state.selectedElement.column = newCol;
-                    }
-                }
-                col.data_type = document.getElementById("edit-col-type").value;
-                col.is_unique = document.getElementById("edit-col-unique").checked;
-                col.nullable = document.getElementById("edit-col-nullable").checked;
-                handleLocalSchemaMutation(state.contract, true);
-            });
-
-            const btnDel = document.getElementById("btn-delete-col");
-            if (btnDel) {
-                btnDel.addEventListener("click", () => {
-                    tbl.columns = tbl.columns.filter((c) => c.name !== col.name);
-                    state.selectedElement = { type: "table", table: tbl.name, data: tbl };
-                    handleLocalSchemaMutation(state.contract, true);
-                });
-            }
-            return;
-        }
-
-        if (sel.type === "relation") {
-            const rel = (state.contract.relations || []).find((r) => r.id === sel.relation);
-            if (!rel) return;
-
-            container.innerHTML = `
-                <div class="inspector-card">
-                    <div class="audit-card-header">
-                        <h3 class="sidebar-heading">Relación: ${escapeHtml(rel.source_table)} &rarr; ${escapeHtml(rel.target_table)}</h3>
-                        <button type="button" class="btn-xs" id="btn-delete-rel" style="color:var(--accent-crimson);">Eliminar Relación</button>
-                    </div>
-                    <div class="form-row">
-                        <label for="edit-rel-ondelete">Política ON DELETE (Al borrar en '${escapeHtml(rel.target_table)}')</label>
-                        <select id="edit-rel-ondelete" class="control-select-sm">
-                            <option value="RESTRICT" ${rel.on_delete === "RESTRICT" ? "selected" : ""}>RESTRICT (Bloquear si tiene hijos)</option>
-                            <option value="CASCADE" ${rel.on_delete === "CASCADE" ? "selected" : ""}>CASCADE (Borrar hijos en cascada)</option>
-                            <option value="SET NULL" ${rel.on_delete === "SET NULL" ? "selected" : ""}>SET NULL (Poner FK en NULL)</option>
-                        </select>
-                    </div>
-                    <button type="button" class="btn btn-primary btn-sm" id="btn-save-rel-changes">Actualizar Política y Auditar</button>
-                </div>
-            `;
-
-            document.getElementById("btn-save-rel-changes").addEventListener("click", () => {
-                rel.on_delete = document.getElementById("edit-rel-ondelete").value;
-                handleLocalSchemaMutation(state.contract, true);
-            });
-
-            document.getElementById("btn-delete-rel").addEventListener("click", () => {
-                state.contract.relations = state.contract.relations.filter((r) => r.id !== rel.id);
-                const srcTbl = (state.contract.tables || []).find((t) => t.name === rel.source_table);
-                const srcCol = srcTbl
-                    ? (srcTbl.columns || []).find((c) => c.name === rel.source_column)
-                    : null;
-                if (srcCol) {
-                    srcCol.is_fk = false;
-                    srcCol.fk_target_table = null;
-                    srcCol.fk_target_column = null;
-                }
-                state.selectedElement = null;
-                handleLocalSchemaMutation(state.contract, true);
-                showToast(`Relación '${rel.source_table}.${rel.source_column} -> ${rel.target_table}' eliminada.`);
-            });
-        }
+            },
+        });
     }
 
     function renderDDLPreview() {
@@ -1437,15 +1242,90 @@ import { SchemaUndoManager } from "./modules/undo_manager.js";
         }
     }
 
+    function renderInspectorSQLError(sqlErr, lineOffset = 0) {
+        const container = document.getElementById("inspector-editor-container");
+        if (!container || !sqlErr) return;
+        const lang = state.lang || "es";
+        const realLine = Math.max(1, Number(sqlErr.line || 1) + Number(lineOffset || 0));
+
+        // Asegurar que el panel derecho esté visible y enfocado en el Inspector
+        const rightPanel = document.getElementById("right-panel");
+        const rightResizer = document.getElementById("resizer-right");
+        if (rightPanel) rightPanel.classList.remove("panel-collapsed");
+        if (rightResizer) rightResizer.classList.remove("panel-collapsed");
+        activateRightTab("inspector");
+
+        container.innerHTML = `
+            <div class="inspector-error-card">
+                <div class="inspector-error-header">
+                    <h3 class="sidebar-heading" style="color:var(--accent-crimson);">${escapeHtml(t("errTitle", lang))}</h3>
+                    <span class="inspector-error-badge">${escapeHtml(t("errLinePrefix", lang))} ${realLine}</span>
+                </div>
+                ${
+                    sqlErr.rolled_back
+                        ? `<div class="inspector-rollback-pill">${escapeHtml(t("errRollbackBadge", lang))}</div>`
+                        : ""
+                }
+                <p style="font-size:12.5px; color:var(--text-primary); line-height:1.45;">
+                    ${escapeHtml(sqlErr.raw_error || sqlErr.message || "")}
+                </p>
+                ${
+                    sqlErr.hint
+                        ? `<div style="font-size:12px; color:var(--text-secondary); line-height:1.45;">
+                               <strong>${escapeHtml(t("errHintLabel", lang))}</strong><br>
+                               ${escapeHtml(sqlErr.hint)}
+                           </div>`
+                        : ""
+                }
+                ${
+                    sqlErr.statement
+                        ? `<div>
+                               <div style="font-size:11.5px; color:var(--text-muted); margin-bottom:4px;">${escapeHtml(t("errStmtLabel", lang))}</div>
+                               <pre class="inspector-error-code">${escapeHtml(sqlErr.statement)}</pre>
+                           </div>`
+                        : ""
+                }
+                <button type="button" id="btn-jump-sql-error-line" class="btn btn-primary btn-sm">
+                    ${escapeHtml(t("errJumpBtn", lang))} (${escapeHtml(t("errLinePrefix", lang))} ${realLine})
+                </button>
+            </div>
+        `;
+
+        const btnJump = document.getElementById("btn-jump-sql-error-line");
+        if (btnJump) {
+            btnJump.addEventListener("click", () => {
+                activateCenterView("sql");
+                activateSQLSubtab("dml");
+                if (sqlEditor && typeof sqlEditor.jumpToLine === "function") {
+                    sqlEditor.jumpToLine(realLine);
+                }
+            });
+        }
+    }
+
     async function executeSQLQuery(confirmedDangerous = false, targetPage = 1) {
         const textarea = document.getElementById("sql-code-textarea");
         if (!textarea || !state.contract) return;
-        const sql = confirmedDangerous
-            ? state.pendingDangerousSql
-            : targetPage > 1 && state.sqlResults.lastSql
-            ? state.sqlResults.lastSql
-            : textarea.value.trim();
+
+        let sql = "";
+        let startLineOffset = 0;
+        let isSelection = false;
+        if (confirmedDangerous) {
+            sql = state.pendingDangerousSql;
+        } else if (targetPage > 1 && state.sqlResults.lastSql) {
+            sql = state.sqlResults.lastSql;
+        } else if (sqlEditor && typeof sqlEditor.getSelectedOrAllText === "function") {
+            const picked = sqlEditor.getSelectedOrAllText();
+            sql = picked.text;
+            isSelection = picked.isSelection;
+            startLineOffset = picked.startLineOffset;
+        } else {
+            sql = textarea.value.trim();
+        }
         if (!sql) return;
+        if (isSelection) {
+            showToast(t("errSelectionNotice", state.lang || "es"));
+        }
 
         try {
             const res = await apiFetch("/api/query/execute", {
@@ -1495,21 +1375,36 @@ import { SchemaUndoManager } from "./modules/undo_manager.js";
             const metrics = document.getElementById("sql-execution-metrics");
             const thead = document.getElementById("sql-results-thead");
             const tbody = document.getElementById("sql-results-tbody");
+            const sqlErr = err.sqlError || {
+                line: 1,
+                message: err.message,
+                raw_error: err.message,
+                statement: sql.slice(0, 220),
+                hint: "",
+                rolled_back: false,
+            };
+            const realLine = Math.max(1, Number(sqlErr.line || 1) + startLineOffset);
+            const displayMsg =
+                startLineOffset > 0 && sqlErr.raw_error
+                    ? `Error SQL (${t("errLinePrefix", state.lang)} ${realLine}): ${sqlErr.raw_error}`
+                    : err.message;
+
             if (metrics) {
-                metrics.textContent = "Ejecución detenida";
+                metrics.textContent = `${t("errLinePrefix", state.lang)} ${realLine} · Error`;
             }
             if (banner) {
                 banner.innerHTML = `<div class="explain-rec-row" style="border-color:var(--accent-crimson); background:var(--accent-crimson-tint); color:var(--text-primary);"><span>${escapeHtml(
-                    err.message
+                    displayMsg
                 )}</span></div>`;
             }
             if (thead) thead.innerHTML = "";
             if (tbody) {
                 tbody.innerHTML = `<tr><td style="padding:18px; color:var(--accent-crimson); white-space:normal;">${escapeHtml(
-                    err.message
+                    displayMsg
                 )}</td></tr>`;
             }
-            showToast(err.message);
+            renderInspectorSQLError(sqlErr, startLineOffset);
+            showToast(displayMsg);
         }
     }
 
@@ -1741,6 +1636,16 @@ import { SchemaUndoManager } from "./modules/undo_manager.js";
             const themeEl = document.getElementById("status-theme-label");
             if (themeEl) themeEl.textContent = state.theme === "light" ? "Tema Claro" : "Tema Oscuro";
         });
+
+        const btnLangToggle = document.getElementById("btn-lang-toggle");
+        if (btnLangToggle) {
+            btnLangToggle.addEventListener("click", () => {
+                state.lang = state.lang === "en" ? "es" : "en";
+                writeStorage(LANG_STORAGE_KEY, state.lang);
+                applyLanguageToDOM(state.lang);
+                showToast(state.lang === "en" ? "Language switched to English." : "Idioma cambiado a Español.");
+            });
+        }
 
         const statusAudBtn = document.getElementById("status-auditor-btn");
         if (statusAudBtn) {

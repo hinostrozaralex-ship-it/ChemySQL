@@ -33,6 +33,81 @@ from backend.core.sql_transpiler import (
 from backend.core.tutor_engine import TutorEngine
 
 
+class SQLExecutionDetailError(Exception):
+    """Error estructurado de ejecución SQL con número de línea exacto, sentencia fallida, causa y estado de rollback."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        line: int = 1,
+        statement: str = "",
+        raw_error: str = "",
+        hint: str = "",
+        rolled_back: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.message = message
+        self.line = line
+        self.statement = statement
+        self.raw_error = raw_error
+        self.hint = hint
+        self.rolled_back = rolled_back
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "message": self.message,
+            "line": self.line,
+            "statement": self.statement,
+            "raw_error": self.raw_error,
+            "hint": self.hint,
+            "rolled_back": self.rolled_back,
+        }
+
+
+def _locate_statement_line(full_sql: str, stmt: str, search_from: int = 0) -> Tuple[int, int]:
+    """Devuelve (linea_1_based, nueva_posicion_busqueda) de la sentencia dentro del script original."""
+    needle = stmt.strip()
+    if not needle:
+        return 1, search_from
+    first_line = needle.splitlines()[0].strip()
+    idx = full_sql.find(needle, search_from)
+    if idx < 0 and first_line:
+        idx = full_sql.find(first_line, search_from)
+    if idx < 0:
+        idx = search_from
+    line_num = full_sql[:idx].count("\n") + 1
+    return line_num, idx + len(first_line)
+
+
+def _build_sql_error_hint(raw_msg: str) -> str:
+    low = raw_msg.lower()
+    if "already exists" in low:
+        return (
+            "La tabla o índice ya existía previamente en el archivo .db. "
+            "Usa 'CREATE TABLE IF NOT EXISTS ...' o selecciona con el ratón únicamente las sentencias nuevas antes de pulsar Ejecutar SQL."
+        )
+    if "syntax error" in low:
+        return (
+            "Revisa comas faltantes o sobrantes al final de la columna anterior, paréntesis sin cerrar o palabras clave mal escritas en esta línea."
+        )
+    if "foreign key constraint failed" in low:
+        return (
+            "Integridad referencial protegida: verifica que el registro padre exista antes de insertar o que no haya registros hijos dependientes al borrar."
+        )
+    if "unique constraint failed" in low:
+        return "Se intentó insertar o actualizar un valor duplicado en una columna marcada como UNIQUE o PRIMARY KEY."
+    if "not null constraint failed" in low:
+        return "Falta asignar un valor a una columna obligatoria (NOT NULL)."
+    if "check constraint failed" in low:
+        return "Un valor incumple una regla de validación CHECK definida en la tabla."
+    if "no such table" in low:
+        return "La tabla referenciada no existe todavía en la base de datos activa. Asegúrate de crearla primero o pulsar 'Aprobar y Desplegar'."
+    if "no such column" in low:
+        return "El nombre de columna indicado no existe en esa tabla. Revisa mayúsculas/minúsculas o posibles erratas."
+    return "Revisa la sentencia indicada en esta línea y vuelve a ejecutar."
+
+
 class DatabaseEngine:
     """Motor de almacenamiento y orquestación SQLite local para SGBD-Smart."""
 
@@ -1221,7 +1296,9 @@ class DatabaseEngine:
                         "tutor_breakdown": self.tutor.decompose_sql_query(stmt),
                     }
 
-        # 2. Ejecución secuencial de todas las sentencias del script
+        # 2. Ejecución atómica secuencial de todas las sentencias del script
+        # Mantenemos una transacción abierta (isolation_level=None + BEGIN) por archivo .db para que,
+        # si una sentencia posterior falla, SQLite haga ROLLBACK completo incluso de los CREATE TABLE previos.
         start_t = time.perf_counter()
         explain_steps: List[Dict[str, Any]] = []
         index_recommendations: List[Dict[str, Any]] = []
@@ -1239,78 +1316,84 @@ class DatabaseEngine:
         total_pages = 1
         truncated = False
 
-        for raw_stmt in statements:
-            # 2a. CREATE DATABASE <nombre> ...
-            m_create_db = re.match(
-                r"^CREATE\s+DATABASE\s+(?:IF\s+NOT\s+EXISTS\s+)?[`\"'\[]?([a-zA-Z0-9_]+)[`\"'\]]?",
-                raw_stmt,
-                flags=re.IGNORECASE,
-            )
-            if m_create_db:
-                new_db_slug = to_snake_case(m_create_db.group(1))
-                new_db_file = self._db_path(new_db_slug)
-                with self._connect(new_db_file) as conn:
-                    conn.execute("PRAGMA foreign_keys = ON;")
-                    conn.commit()
-                current_db = new_db_slug
-                switched_db = new_db_slug
-                schema_updated = True
-                execution_log.append(f"Base de datos '{new_db_slug}.db' creada correctamente.")
-                continue
+        tx_conns: Dict[str, sqlite3.Connection] = {}
+        tx_dirty: Set[str] = set()
+        search_cursor = 0
 
-            # 2b. USE <nombre>
-            m_use_db = re.match(
-                r"^USE\s+[`\"'\[]?([a-zA-Z0-9_]+)[`\"'\]]?$",
-                raw_stmt.strip(),
-                flags=re.IGNORECASE,
-            )
-            if m_use_db:
-                target_db_slug = to_snake_case(m_use_db.group(1))
-                target_db_file = self._db_path(target_db_slug)
-                if not target_db_file.exists():
-                    with self._connect(target_db_file) as conn:
-                        conn.execute("PRAGMA foreign_keys = ON;")
-                        conn.commit()
-                current_db = target_db_slug
-                switched_db = target_db_slug
-                schema_updated = True
-                execution_log.append(f"Contexto cambiado a la base de datos '{target_db_slug}.db'.")
-                continue
+        def get_tx_conn(target_db: str) -> sqlite3.Connection:
+            if target_db in tx_conns:
+                return tx_conns[target_db]
+            db_file_target = self._db_path(target_db)
+            conn_tx = sqlite3.connect(db_file_target, isolation_level=None)
+            conn_tx.row_factory = sqlite3.Row
+            conn_tx.execute("PRAGMA foreign_keys = ON;")
+            tx_conns[target_db] = conn_tx
+            return conn_tx
 
-            # 2c. SHOW DATABASES
-            if re.match(r"^SHOW\s+DATABASES\b", raw_stmt.strip(), flags=re.IGNORECASE):
-                all_dbs = self.list_databases()
-                is_select = True
-                columns = ["base_de_datos", "tablas", "filas", "tamano_kb"]
-                rows = [
-                    {
-                        "base_de_datos": f"{d['db_name']}.db",
-                        "tablas": d["table_count"],
-                        "filas": d["total_rows"],
-                        "tamano_kb": d["size_kb"],
-                    }
-                    for d in all_dbs
-                ]
-                rowcount = len(rows)
-                execution_log.append(f"Listado de {rowcount} bases de datos locales.")
-                continue
+        try:
+            for raw_stmt in statements:
+                stmt_line, search_cursor = _locate_statement_line(sql, raw_stmt, search_cursor)
 
-            # 2d. Sentencias SQL estándar (DDL / DML / SELECT)
-            norm_stmt = self._normalize_sql_for_sqlite(raw_stmt)
-            upper_norm = norm_stmt.strip().upper()
-            db_file = self._db_path(current_db)
-            if not db_file.exists():
-                with self._connect(db_file) as conn:
-                    conn.execute("PRAGMA foreign_keys = ON;")
-                    conn.commit()
+                # 2a. CREATE DATABASE <nombre> ...
+                m_create_db = re.match(
+                    r"^CREATE\s+DATABASE\s+(?:IF\s+NOT\s+EXISTS\s+)?[`\"'\[]?([a-zA-Z0-9_]+)[`\"'\]]?",
+                    raw_stmt,
+                    flags=re.IGNORECASE,
+                )
+                if m_create_db:
+                    new_db_slug = to_snake_case(m_create_db.group(1))
+                    get_tx_conn(new_db_slug)
+                    current_db = new_db_slug
+                    switched_db = new_db_slug
+                    schema_updated = True
+                    execution_log.append(f"Base de datos '{new_db_slug}.db' creada correctamente.")
+                    continue
 
-            stmt_is_select = upper_norm.startswith(("SELECT", "PRAGMA", "EXPLAIN", "WITH"))
-            stmt_is_ddl = upper_norm.startswith(("CREATE", "ALTER", "DROP"))
+                # 2b. USE <nombre>
+                m_use_db = re.match(
+                    r"^USE\s+[`\"'\[]?([a-zA-Z0-9_]+)[`\"'\]]?$",
+                    raw_stmt.strip(),
+                    flags=re.IGNORECASE,
+                )
+                if m_use_db:
+                    target_db_slug = to_snake_case(m_use_db.group(1))
+                    get_tx_conn(target_db_slug)
+                    current_db = target_db_slug
+                    switched_db = target_db_slug
+                    schema_updated = True
+                    execution_log.append(f"Contexto cambiado a la base de datos '{target_db_slug}.db'.")
+                    continue
 
-            with self._connect(db_file) as conn:
-                conn.execute("PRAGMA foreign_keys = ON;")
-                conn.row_factory = sqlite3.Row
+                # 2c. SHOW DATABASES
+                if re.match(r"^SHOW\s+DATABASES\b", raw_stmt.strip(), flags=re.IGNORECASE):
+                    all_dbs = self.list_databases()
+                    is_select = True
+                    columns = ["base_de_datos", "tablas", "filas", "tamano_kb"]
+                    rows = [
+                        {
+                            "base_de_datos": f"{d['db_name']}.db",
+                            "tablas": d["table_count"],
+                            "filas": d["total_rows"],
+                            "tamano_kb": d["size_kb"],
+                        }
+                        for d in all_dbs
+                    ]
+                    rowcount = len(rows)
+                    execution_log.append(f"Listado de {rowcount} bases de datos locales.")
+                    continue
+
+                # 2d. Sentencias SQL estándar (DDL / DML / SELECT)
+                norm_stmt = self._normalize_sql_for_sqlite(raw_stmt)
+                upper_norm = norm_stmt.strip().upper()
+                conn = get_tx_conn(current_db)
                 cur = conn.cursor()
+
+                stmt_is_select = upper_norm.startswith(("SELECT", "PRAGMA", "EXPLAIN", "WITH"))
+                stmt_is_ddl = upper_norm.startswith(("CREATE", "ALTER", "DROP"))
+
+                if not stmt_is_select and current_db not in tx_dirty:
+                    conn.execute("BEGIN")
+                    tx_dirty.add(current_db)
 
                 if upper_norm.startswith("SELECT"):
                     try:
@@ -1331,7 +1414,30 @@ class DatabaseEngine:
                     except sqlite3.Error:
                         pass
 
-                cur.execute(norm_stmt)
+                try:
+                    cur.execute(norm_stmt)
+                except sqlite3.Error as sql_exc:
+                    rolled_back = False
+                    for db_k in list(tx_dirty):
+                        try:
+                            tx_conns[db_k].execute("ROLLBACK")
+                            rolled_back = True
+                        except sqlite3.Error:
+                            pass
+                    tx_dirty.clear()
+                    raw_msg = str(sql_exc)
+                    snippet = raw_stmt.strip()
+                    if len(snippet) > 260:
+                        snippet = snippet[:260] + "..."
+                    raise SQLExecutionDetailError(
+                        f"Error SQL en línea {stmt_line}: {raw_msg}",
+                        line=stmt_line,
+                        statement=snippet,
+                        raw_error=raw_msg,
+                        hint=_build_sql_error_hint(raw_msg),
+                        rolled_back=rolled_back,
+                    ) from sql_exc
+
                 if stmt_is_select and cur.description:
                     is_select = True
                     columns = [col[0] for col in cur.description]
@@ -1348,12 +1454,22 @@ class DatabaseEngine:
                 else:
                     affected = cur.rowcount if cur.rowcount >= 0 else 0
                     rowcount += affected
-                    conn.commit()
                     if stmt_is_ddl:
                         schema_updated = True
                         execution_log.append(f"Sentencia DDL ejecutada: {norm_stmt.splitlines()[0][:70]}")
                     else:
                         execution_log.append(f"Sentencia DML ejecutada ({affected} filas afectadas).")
+
+            # Confirmar todas las transacciones pendientes al finalizar sin errores
+            for db_k in list(tx_dirty):
+                tx_conns[db_k].execute("COMMIT")
+            tx_dirty.clear()
+        finally:
+            for c_tx in tx_conns.values():
+                try:
+                    c_tx.close()
+                except Exception:
+                    pass
 
         elapsed_ms = round((time.perf_counter() - start_t) * 1000, 2)
 

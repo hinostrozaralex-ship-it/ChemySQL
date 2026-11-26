@@ -124,6 +124,36 @@ class SQLCodeEditorController {
         return this.textarea ? this.textarea.value : "";
     }
 
+    getSelectedOrAllText() {
+        if (!this.textarea) return { text: "", isSelection: false, startLineOffset: 0 };
+        const start = this.textarea.selectionStart;
+        const end = this.textarea.selectionEnd;
+        const full = this.textarea.value;
+        if (end > start) {
+            const selected = full.slice(start, end).trim();
+            if (selected) {
+                const startLineOffset = full.slice(0, start).split("\n").length - 1;
+                return { text: selected, isSelection: true, startLineOffset };
+            }
+        }
+        return { text: full.trim(), isSelection: false, startLineOffset: 0 };
+    }
+
+    jumpToLine(lineNumber) {
+        if (!this.textarea) return;
+        const lines = this.textarea.value.split("\n");
+        const idx = Math.max(0, Math.min(lines.length - 1, Number(lineNumber || 1) - 1));
+        let start = 0;
+        for (let i = 0; i < idx; i++) {
+            start += lines[i].length + 1;
+        }
+        const end = start + lines[idx].length;
+        this.textarea.focus();
+        this.textarea.setSelectionRange(start, end);
+        this._keepActiveLineCentered();
+        this.refreshHighlight();
+    }
+
     insertTokenAtCursor(token, smartSpacing = true) {
         if (!this.textarea) return;
         const start = this.textarea.selectionStart;

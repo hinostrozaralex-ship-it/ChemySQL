@@ -92,7 +92,11 @@ export async function apiFetch(url, options = {}) {
     const response = await fetch(url, Object.assign({}, options, { headers }));
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
-        throw new Error(data.detail || `Error HTTP ${response.status}`);
+        const err = new Error(data.detail || `Error HTTP ${response.status}`);
+        if (data.sql_error) {
+            err.sqlError = data.sql_error;
+        }
+        throw err;
     }
     return data;
 }

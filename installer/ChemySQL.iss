@@ -1,6 +1,6 @@
 ; Script de Instalador Clásico de Windows para ChemySQL (Inno Setup 6)
 #define MyAppName "ChemySQL"
-#define MyAppVersion "1.4.2"
+#define MyAppVersion "1.5.0"
 #define MyAppPublisher "ChemySQL"
 #define MyAppExeName "ChemySQL.exe"
 
@@ -22,9 +22,11 @@ UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
+ShowLanguageDialog=yes
 
 [Languages]
 Name: "spanish"; MessagesFile: "compiler:Languages\Spanish.isl"
+Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
@@ -38,3 +40,18 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilen
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+
+[Code]
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  LangCode: String;
+begin
+  if CurStep = ssPostInstall then
+  begin
+    if ActiveLanguage = 'english' then
+      LangCode := 'en'
+    else
+      LangCode := 'es';
+    SaveStringToFile(ExpandConstant('{app}\language.txt'), LangCode, False);
+  end;
+end;

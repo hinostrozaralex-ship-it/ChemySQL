@@ -2,6 +2,16 @@
 
 Todos los cambios relevantes de **ChemySQL** se documentan en este archivo.
 
+## [1.5.0] - 2026-11-26
+
+### Añadido y corregido
+* **Soporte bilingüe completo (Español / English):** selector de idioma nativo en el instalador de Windows (`Setup-ChemySQL-1.5.0.exe`), conmutador rápido `ES · EN` en la barra de estado y soporte de lenguaje natural y especificaciones estructuradas (`Table` / `Tabla`) en inglés y español en el motor Texto → Esquema.
+* **Ejecución SQL atómica con `ROLLBACK` automático:** si una sentencia falla dentro de un script multi-sentencia, SQLite revierte todo el bloque (incluyendo `CREATE TABLE` previos) evitando dejar tablas a medias y errores falsos de `table already exists` al corregir y re-ejecutar.
+* **Ejecutar selección sombreada:** sombrear una sentencia y pulsar `Ejecutar SQL` (`Ctrl+Enter`) ejecuta únicamente el fragmento seleccionado.
+* **Inspector profesional ampliado y Pre-Análisis SQL en vivo:** propiedades globales de proyecto (`COLLATE`), Inspector de Tabla enriquecido (`Ver Datos`, `Copiar CREATE TABLE`, lista clicable de columnas), Inspector de Columna completo (`DEFAULT`, `CHECK`, `GENERATED ALWAYS AS`, PK compuestas, `INDEX`) y detección de sintaxis en tiempo real con salto directo a la línea exacta.
+* **Diagnóstico detallado de errores SQL en el Inspector:** muestra la línea exacta del error, estado de `ROLLBACK`, causa probable, fragmento fallido y un botón **"Ir a la línea en el editor"**.
+* **Corrección visual del panel izquierdo:** eliminado el desbordamiento horizontal de los botones `Cambiar Carpeta` y `Abrir .db` en paneles estrechos.
+
 ## [1.4.2] - 2026-11-25
 
 ### Añadido y mejorado

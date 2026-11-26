@@ -27,7 +27,7 @@ from fastapi import HTTPException
 from backend import APP_VERSION
 from backend.api import routes
 from backend.core.auditor import ProactiveAuditor
-from backend.core.db_engine import DatabaseEngine
+from backend.core.db_engine import DatabaseEngine, SQLExecutionDetailError
 from backend.core.nlp_parser import SpanishNLPParser
 from backend.core.schema_model import ColumnModel, MasterSchemaContract, SaveSQLRequest
 from backend.core.sql_transpiler import SQLTranspiler, split_sql_statements
@@ -254,11 +254,62 @@ class TestAPISecurity(unittest.TestCase):
     def test_health_version_and_sql_write_protection(self) -> None:
         health = routes.health_check()
         self.assertEqual(health["version"], APP_VERSION)
+        self.assertIn(health["default_language"], ("es", "en"))
         with self.assertRaises(HTTPException) as ctx:
             routes.save_sql_script_file(
                 SaveSQLRequest(content="echo pwn", path=r"C:\Windows\Temp\evil.bat", save_as=False)
             )
         self.assertEqual(ctx.exception.status_code, 403)
+
+    def test_atomic_ddl_rollback_and_error_line(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            eng = DatabaseEngine(Path(tmp))
+            broken_script = (
+                "CREATE TABLE INSTALACION (\n"
+                "    cod_instalacion CHAR(3) NOT NULL PRIMARY KEY,\n"
+                "    nombre VARCHAR(40) NOT NULL\n"
+                ");\n\n"
+                "CREATE TABLE PISTA (\n"
+                "    cod_pista SMALLINT NOT NULL PRIMARY KEY,\n"
+                "    precio_hora DECIMAL(5,2) NOT NULL BROKEN_SYNTAX\n"
+                ");"
+            )
+            with self.assertRaises(SQLExecutionDetailError) as ctx:
+                eng.execute_query("rollback_test", broken_script)
+            self.assertTrue(ctx.exception.rolled_back)
+            self.assertEqual(ctx.exception.line, 6)
+
+            # Tras corregir el error y re-ejecutar el script completo, NO debe dar 'table already exists'
+            fixed_script = broken_script.replace("BROKEN_SYNTAX", "")
+            res = eng.execute_query("rollback_test", fixed_script)
+            self.assertTrue(res["schema_updated"])
+            tbl_names = [t["name"] for t in res["schema_contract"]["tables"]]
+            self.assertEqual(tbl_names, ["INSTALACION", "PISTA"])
+
+    def test_english_structured_spec_and_free_text(self) -> None:
+        nlp = SpanishNLPParser()
+        en_spec = """
+        Create a database called gym_hub.
+        Table MEMBER:
+        member_id: type CHAR(4), required (NOT NULL), primary key.
+        full_name: type VARCHAR(50), required (NOT NULL).
+        Table SESSION:
+        session_id: type INT, required (NOT NULL), primary key.
+        member_id: type CHAR(4), required (NOT NULL), foreign key referencing member_id of table MEMBER.
+        """
+        c = nlp.parse_text_to_schema(en_spec, db_name="old_name")
+        self.assertEqual(c.db_name, "gym_hub")
+        self.assertEqual([t.name for t in c.tables], ["MEMBER", "SESSION"])
+        fk_col = next(col for col in c.tables[1].columns if col.name == "member_id")
+        self.assertTrue(fk_col.is_fk)
+        self.assertEqual(fk_col.data_type, "CHAR")
+        self.assertEqual(fk_col.length, 4)
+
+        en_free = nlp.parse_text_to_schema("Customers place orders containing multiple products with price and stock.")
+        ent_names = [t.name for t in en_free.tables]
+        self.assertIn("clientes", ent_names)
+        self.assertIn("pedidos", ent_names)
+        self.assertIn("productos", ent_names)
 
 
 if __name__ == "__main__":

@@ -918,16 +918,20 @@ class SpanishNLPParser:
         return contract
 
     def _extract_explicit_db_name(self, raw_text: str) -> Optional[str]:
-        """Extrae el nombre explícito de la base de datos si el texto declara 'base de datos llamada <nombre>'."""
+        """Extrae el nombre explícito de la base de datos en español o inglés ('base de datos llamada X' / 'database called X')."""
         stop = {
             "para", "con", "de", "del", "que", "en", "donde", "sobre", "la", "el",
             "un", "una", "los", "las", "por", "como", "segun", "mediante", "sin",
+            "for", "with", "of", "that", "in", "where", "about", "the", "a", "an", "to",
         }
         patterns = [
             r"base\s+de\s+datos\s+(?:llamada|denominada|nombrada)\s+[`\"'«]?([A-Za-z_][A-Za-z0-9_]*)[`\"'»]?",
             r"crear\s+(?:una\s+|la\s+)?base\s+de\s+datos\s+(?:llamada\s+|denominada\s+|nombrada\s+)?[`\"'«]?([A-Za-z_][A-Za-z0-9_]*)[`\"'»]?",
             r"\bbd\s+(?:llamada|denominada|nombrada)\s+[`\"'«]?([A-Za-z_][A-Za-z0-9_]*)[`\"'»]?",
             r"esquema\s+(?:llamado|denominado|nombrado)\s+[`\"'«]?([A-Za-z_][A-Za-z0-9_]*)[`\"'»]?",
+            r"database\s+(?:called|named)\s+[`\"'«]?([A-Za-z_][A-Za-z0-9_]*)[`\"'»]?",
+            r"create\s+(?:a\s+|the\s+)?database\s+(?:called\s+|named\s+)?[`\"'«]?([A-Za-z_][A-Za-z0-9_]*)[`\"'»]?",
+            r"schema\s+(?:called|named)\s+[`\"'«]?([A-Za-z_][A-Za-z0-9_]*)[`\"'»]?",
         ]
         for pat in patterns:
             m = re.search(pat, raw_text, flags=re.IGNORECASE)
@@ -992,6 +996,65 @@ class SpanishNLPParser:
             "trabajadores": "empleados",
             "articulo": "productos",
             "articulos": "productos",
+            # Sinónimos en inglés (Opción B bilingüe)
+            "customer": "clientes",
+            "customers": "clientes",
+            "client": "clientes",
+            "clients": "clientes",
+            "vehicle": "vehiculos",
+            "vehicles": "vehiculos",
+            "car": "vehiculos",
+            "cars": "vehiculos",
+            "repair": "reparaciones",
+            "repairs": "reparaciones",
+            "part": "piezas",
+            "parts": "piezas",
+            "invoice": "facturas",
+            "invoices": "facturas",
+            "payment": "pagos",
+            "payments": "pagos",
+            "order": "pedidos",
+            "orders": "pedidos",
+            "product": "productos",
+            "products": "productos",
+            "category": "categorias",
+            "categories": "categorias",
+            "supplier": "proveedores",
+            "suppliers": "proveedores",
+            "book": "libros",
+            "books": "libros",
+            "author": "autores",
+            "authors": "autores",
+            "member": "socios",
+            "members": "socios",
+            "loan": "prestamos",
+            "loans": "prestamos",
+            "patient": "pacientes",
+            "patients": "pacientes",
+            "appointment": "citas",
+            "appointments": "citas",
+            "student": "estudiantes",
+            "students": "estudiantes",
+            "teacher": "profesores",
+            "teachers": "profesores",
+            "course": "cursos",
+            "courses": "cursos",
+            "room": "habitaciones",
+            "rooms": "habitaciones",
+            "booking": "reservas",
+            "bookings": "reservas",
+            "reservation": "reservas",
+            "reservations": "reservas",
+            "employee": "empleados",
+            "employees": "empleados",
+            "department": "departamentos",
+            "departments": "departamentos",
+            "project": "proyectos",
+            "projects": "proyectos",
+            "task": "tareas",
+            "tasks": "tareas",
+            "user": "usuarios",
+            "users": "usuarios",
         }
 
         for plural_ent in all_known_nouns:
@@ -1311,10 +1374,10 @@ class SpanishNLPParser:
     # ==========================================================================
 
     def _is_structured_spec(self, raw_text: str) -> bool:
-        """Detecta si el texto contiene definiciones estructuradas explícitas (Tabla <NOMBRE> + columnas tipadas)."""
+        """Detecta si el texto contiene definiciones estructuradas explícitas (Tabla/Table <NOMBRE> + columnas tipadas)."""
         table_headers = list(
             re.finditer(
-                r"(?:^|[\n.;:•\-]\s*)(?:\*\*)?Tabla\s+([A-Za-z_][A-Za-z0-9_]*)(?:\*\*)?\s*(?:\([^)]*\))?\s*:",
+                r"(?:^|[\n.;:•\-]\s*)(?:\*\*)?(?:Tabla|Table)\s+([A-Za-z_][A-Za-z0-9_]*)(?:\*\*)?\s*(?:\([^)]*\))?\s*:",
                 raw_text,
                 flags=re.IGNORECASE,
             )
@@ -1323,7 +1386,7 @@ class SpanishNLPParser:
             return False
         has_typed_cols = bool(
             re.search(
-                r"[a-zA-Z_][a-zA-Z0-9_]*\s*:\s*(?:tipo\s+)?(?:SMALLINT|TINYINT|BIGINT|INTEGER|INT|VARCHAR|CHAR|DECIMAL|NUMERIC|DATE|TIME|DATETIME|BOOLEAN|TEXT|columna\s+calculada|calculad[ao])",
+                r"[a-zA-Z_][a-zA-Z0-9_]*\s*:\s*(?:(?:tipo|type)\s+)?(?:SMALLINT|TINYINT|BIGINT|INTEGER|INT|VARCHAR|CHAR|DECIMAL|NUMERIC|DATE|TIME|DATETIME|BOOLEAN|TEXT|columna\s+calculada|computed\s+column|calculated|calculad[ao])",
                 raw_text,
                 flags=re.IGNORECASE,
             )
@@ -1349,9 +1412,9 @@ class SpanishNLPParser:
 
         collation = self._extract_collation(raw_text)
 
-        # 2. Localizar todos los bloques "Tabla <NOMBRE> (descripción opcional):"
+        # 2. Localizar todos los bloques "Tabla/Table <NOMBRE> (descripción opcional):"
         header_pattern = re.compile(
-            r"(?:^|[\n.;:•\-]\s*)(?:\*\*)?Tabla\s+([A-Za-z_][A-Za-z0-9_]*)(?:\*\*)?\s*(?:\(([^)]*)\))?\s*:",
+            r"(?:^|[\n.;:•\-]\s*)(?:\*\*)?(?:Tabla|Table)\s+([A-Za-z_][A-Za-z0-9_]*)(?:\*\*)?\s*(?:\(([^)]*)\))?\s*:",
             flags=re.IGNORECASE,
         )
         matches = list(header_pattern.finditer(raw_text))
@@ -1371,10 +1434,10 @@ class SpanishNLPParser:
             table_names_ci[to_singular(t_name).lower()] = t_name
             table_names_ci[to_plural(t_name).lower()] = t_name
 
-            # 3. Extraer declaración de clave primaria compuesta al cierre de la tabla si existe
+            # 3. Extraer declaración de clave primaria compuesta al cierre de la tabla si existe (ES / EN)
             composite_pk_cols: List[str] = []
             m_comp_pk = re.search(
-                r"(?:la\s+)?clave\s+primaria(?:\s+de\s+[A-Za-z0-9_]+)?\s+(?:es\s+una\s+)?(?:clave\s+primaria\s+)?compuesta[^.(]*\(([^)]+)\)",
+                r"(?:(?:la\s+)?clave\s+primaria(?:\s+de\s+[A-Za-z0-9_]+)?\s+(?:es\s+una\s+)?(?:clave\s+primaria\s+)?compuesta|composite\s+primary\s+key)[^.(]*\(([^)]+)\)",
                 body_text,
                 flags=re.IGNORECASE,
             )
@@ -1573,32 +1636,33 @@ class SpanishNLPParser:
                 data_type = str(sem["data_type"])
                 length = sem["length"]  # type: ignore[assignment]
 
-        # 2. Columna calculada / generada
+        # 2. Columna calculada / generada (ES / EN)
         computed_expr: Optional[str] = None
-        if any(w in norm_spec for w in ("calculad", "generad", "generated always", "columna derivada")):
+        if any(w in norm_spec for w in ("calculad", "generad", "generated always", "columna derivada", "computed", "calculated", "derived")):
             m_expr = re.search(
-                r"(?:como\s+(?:el\s+producto\s+de\s+|el\s+resultado\s+de\s+|la\s+formula\s+)?|as\s*\(|=\s*|\(\s*)([a-zA-Z_][a-zA-Z0-9_]*\s*[\*\/\+\-]\s*[a-zA-Z0-9_]+)",
+                r"(?:(?:como|as)\s+(?:el\s+producto\s+de\s+|el\s+resultado\s+de\s+|la\s+formula\s+|the\s+product\s+of\s+)?|as\s*\(|=\s*|\(\s*)([a-zA-Z_][a-zA-Z0-9_]*\s*[\*\/\+\-]\s*[a-zA-Z0-9_]+)",
                 spec_text,
                 flags=re.IGNORECASE,
             )
             if m_expr:
                 computed_expr = re.sub(r"\s+", " ", m_expr.group(1).strip())
 
-        # 3. Clave primaria, autoincremental, unicidad y nulabilidad
+        # 3. Clave primaria, autoincremental, unicidad y nulabilidad (ES / EN)
         is_pk = bool(
             re.search(r"\b(?:clave\s+primaria|primary\s+key)\b", norm_spec)
             and "compuesta" not in norm_spec
+            and "composite" not in norm_spec
         )
         auto_inc = bool(re.search(r"\b(?:auto_increment|autoincrement|identity|autoincremental)\b", norm_spec))
         # Evitar falsos positivos de "una única instalación" dentro de notas de cardinalidad
-        spec_without_rel_note = re.sub(r"\(relacion\s+[^)]*\)", "", norm_spec)
+        spec_without_rel_note = re.sub(r"\((?:relacion|relationship)\s+[^)]*\)", "", norm_spec)
         is_unique = bool(
             re.search(r"\b(?:unique|valor\s+unic[oa]|no\s+repetible|irrepetible)\b|(?:^|,\s*)unic[oa]\b", spec_without_rel_note)
         )
 
-        if re.search(r"\b(?:not\s+null|obligatorio|obligatoria|no\s+nulo)\b", norm_spec) or is_pk:
+        if re.search(r"\b(?:not\s+null|obligatorio|obligatoria|no\s+nulo|required|mandatory)\b", norm_spec) or is_pk:
             nullable = False
-        elif re.search(r"\b(?:opcional|puede\s+ser\s+nulo|permite\s+null)\b", norm_spec):
+        elif re.search(r"\b(?:opcional|optional|puede\s+ser\s+nulo|permite\s+null|nullable)\b", norm_spec):
             nullable = True
         else:
             nullable = True
@@ -1632,20 +1696,26 @@ class SpanishNLPParser:
                         check_expr = inner
                     break
 
-        # 6. Clave foránea (FOREIGN KEY -> tabla(columna))
+        # 6. Clave foránea (FOREIGN KEY -> tabla(columna)) (ES / EN)
         is_fk = False
         fk_info: Optional[Tuple[str, str]] = None
-        if re.search(r"\b(?:clave\s+foranea|foreign\s+key|referencia\s+a|apunta\s+a|references)\b", norm_spec):
+        if re.search(r"\b(?:clave\s+foranea|foreign\s+key|referencia\s+a|apunta\s+a|references|referencing)\b", norm_spec):
             is_fk = True
-            # Patrón 1: "referencia a [la columna] cod_instalacion de [la] tabla INSTALACION"
+            # Patrón 1 (ES): "referencia a [la columna] cod_instalacion de [la] tabla INSTALACION"
             m_fk1 = re.search(
                 r"(?:referencia|apunta)\s+a\s+(?:(?:la\s+)?columna\s+|(?:el\s+)?campo\s+)?[`\"']?([a-zA-Z_][a-zA-Z0-9_]*)[`\"']?\s+de\s+(?:la\s+)?tabla\s+[`\"']?([a-zA-Z_][a-zA-Z0-9_]*)[`\"']?",
                 spec_text,
                 flags=re.IGNORECASE,
             )
-            # Patrón 2: "REFERENCES PISTA(cod_pista)" o "tabla PISTA(cod_pista)"
+            # Patrón 2 (ES/EN): "REFERENCES PISTA(cod_pista)" o "tabla/table PISTA(cod_pista)"
             m_fk2 = re.search(
-                r"(?:REFERENCES|tabla)\s+[`\"']?([a-zA-Z_][a-zA-Z0-9_]*)[`\"']?\s*\(\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\)",
+                r"(?:REFERENCES|REFERENCING|tabla|table)\s+[`\"']?([a-zA-Z_][a-zA-Z0-9_]*)[`\"']?\s*\(\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\)",
+                spec_text,
+                flags=re.IGNORECASE,
+            )
+            # Patrón 3 (EN): "referencing [column] cod_pista (?:of|in|from) [table] PISTA"
+            m_fk3 = re.search(
+                r"(?:references|referencing)\s+(?:column\s+|field\s+)?[`\"']?([a-zA-Z_][a-zA-Z0-9_]*)[`\"']?\s+(?:of|in|from)\s+(?:table\s+)?[`\"']?([a-zA-Z_][a-zA-Z0-9_]*)[`\"']?",
                 spec_text,
                 flags=re.IGNORECASE,
             )
@@ -1653,6 +1723,8 @@ class SpanishNLPParser:
                 fk_info = (m_fk1.group(2).strip(), m_fk1.group(1).strip())
             elif m_fk2:
                 fk_info = (m_fk2.group(1).strip(), m_fk2.group(2).strip())
+            elif m_fk3:
+                fk_info = (m_fk3.group(2).strip(), m_fk3.group(1).strip())
 
         tutor_desc = (
             f"Columna calculada automáticamente a partir de `{computed_expr}` (no requiere inserción manual)."

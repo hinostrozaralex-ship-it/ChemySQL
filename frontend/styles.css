@@ -775,6 +775,7 @@ body[data-app-mode="standard"] .sql-editor-workspace {
     display: flex;
     flex-direction: column;
     gap: 7px;
+    overflow: hidden;
 }
 
 .workspace-folder-top {
@@ -805,7 +806,71 @@ body[data-app-mode="standard"] .sql-editor-workspace {
 
 .workspace-folder-actions {
     display: flex;
+    flex-wrap: wrap;
     gap: 6px;
+    min-width: 0;
+}
+
+.workspace-folder-actions .btn-tool {
+    min-width: 0;
+    flex: 1 1 92px;
+    justify-content: center;
+    padding: 5px 8px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.inspector-error-card {
+    border: 1px solid var(--accent-crimson);
+    background-color: var(--accent-crimson-tint);
+    border-radius: 7px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.inspector-error-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.inspector-error-badge {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background-color: var(--accent-crimson);
+    color: #ffffff;
+}
+
+.inspector-rollback-pill {
+    font-size: 11.5px;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 5px;
+    background-color: var(--accent-emerald-tint);
+    color: var(--accent-emerald);
+    border: 1px solid var(--accent-emerald);
+}
+
+.inspector-error-code {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    padding: 8px 10px;
+    border-radius: 5px;
+    background-color: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-primary);
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    user-select: text;
 }
 
 .db-item-card {
@@ -3015,4 +3080,133 @@ html[data-viewport="mobile"] body {
     width: 1px;
     height: 12px;
     background-color: var(--border-subtle);
+}
+
+/* ==========================================================================
+   Inspector Profesional (KPIs, Lista Clicable, Check Grid y Pre-Análisis SQL)
+   ========================================================================== */
+.inspector-kpi-strip {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(56px, 1fr));
+    gap: 6px;
+}
+
+.inspector-kpi {
+    padding: 6px 8px;
+    border-radius: 6px;
+    background-color: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+}
+
+.inspector-kpi strong {
+    font-family: var(--font-mono);
+    font-size: 13.5px;
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+}
+
+.inspector-kpi span {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+.inspector-quick-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 220px;
+    overflow-y: auto;
+}
+
+.inspector-quick-row {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: 5px;
+    background-color: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-primary);
+    font-size: 12px;
+    text-align: left;
+    cursor: pointer;
+}
+
+.inspector-quick-row:hover {
+    border-color: var(--accent-cyan);
+    background-color: var(--bg-surface-hover);
+}
+
+.inspector-quick-name {
+    font-family: var(--font-mono);
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.inspector-quick-type {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-secondary);
+    flex-shrink: 0;
+}
+
+.inspector-check-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px 10px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    background-color: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    font-size: 12px;
+    color: var(--text-primary);
+}
+
+.inspector-check-grid label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+}
+
+.inspector-issues-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.inspector-issue-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 7px 9px;
+    border-radius: 6px;
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.inspector-issue-row.is-error {
+    background-color: var(--accent-crimson-tint);
+    border: 1px solid var(--accent-crimson);
+    color: var(--text-primary);
+}
+
+.inspector-issue-row.is-warn {
+    background-color: var(--accent-amber-tint);
+    border: 1px solid var(--accent-amber);
+    color: var(--text-primary);
+}
+
+.inspector-issue-text {
+    flex: 1;
+    min-width: 0;
 }

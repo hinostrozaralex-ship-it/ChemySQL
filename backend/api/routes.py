@@ -12,9 +12,10 @@ import shutil
 import sys
 from typing import Any, Dict, Literal, Optional, Set
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import JSONResponse
 
 from backend import APP_VERSION
-from backend.core.db_engine import DatabaseEngine
+from backend.core.db_engine import DatabaseEngine, SQLExecutionDetailError
 from backend.core.nlp_parser import to_snake_case
 from backend.core.schema_model import (
     AutoFixRequest,
@@ -68,6 +69,24 @@ def _build_ddl_previews(contract: MasterSchemaContract) -> Dict[str, str]:
     return engine.transpiler.build_all_ddl_previews(contract)
 
 
+def _detect_default_language() -> str:
+    """Lee el idioma elegido en el instalador (language.txt) o configuración local ('es' por defecto)."""
+    candidates = []
+    if getattr(sys, "frozen", False):
+        candidates.append(Path(sys.executable).resolve().parent / "language.txt")
+        candidates.append(APP_USER_ROOT / "language.txt")
+    else:
+        candidates.append(PROJECT_ROOT / "language.txt")
+    for p in candidates:
+        if p.exists():
+            val = p.read_text(encoding="utf-8", errors="ignore").strip().lower()
+            if val.startswith("en"):
+                return "en"
+            if val.startswith("es"):
+                return "es"
+    return "es"
+
+
 @router.get("/health")
 def health_check() -> Dict[str, Any]:
     return {
@@ -75,6 +94,7 @@ def health_check() -> Dict[str, Any]:
         "version": APP_VERSION,
         "service": "ChemySQL Deterministic Engine",
         "workspaces_dir": str(engine.workspaces_dir),
+        "default_language": _detect_default_language(),
     }
 
 
@@ -522,7 +542,7 @@ def delete_explorer_row(
 
 
 @router.post("/query/execute")
-def execute_sql_query(req: QueryExecutionRequest) -> Dict[str, Any]:
+def execute_sql_query(req: QueryExecutionRequest) -> Any:
     try:
         return engine.execute_query(
             db_name=req.db_name,
@@ -530,6 +550,11 @@ def execute_sql_query(req: QueryExecutionRequest) -> Dict[str, Any]:
             confirmed_dangerous=req.confirmed_dangerous,
             page=req.page,
             page_size=req.page_size,
+        )
+    except SQLExecutionDetailError as exc:
+        return JSONResponse(
+            status_code=400,
+            content={"detail": exc.message, "sql_error": exc.to_dict()},
         )
     except Exception as exc:
         raw_msg = str(exc)
